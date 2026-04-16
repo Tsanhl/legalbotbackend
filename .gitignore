@@ -3,3 +3,9 @@ node_modules/
 __pycache__/
 *.pyc
 .streamlit/
+chroma_db/
+.env.local
+.venv/
+.claude/
+Law resouces  copy 2/
+git-lfs-3.7.1/

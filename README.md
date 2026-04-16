@@ -1,23 +1,31 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# legalbotbackend
 
-# Run and deploy your AI Studio app
+This repository is now backend-only. The Streamlit/UI layer and old frontend assets have been removed so the project focuses on two backend flows:
 
-This contains everything you need to run your app locally.
+1. `backend_answer_runtime.send_complete_answer_with_docs(...)`
+   Canonical backend complete-answer entrypoint. Uses direct/backend mode by default, keeps legal RAG + code-guide routing active, and applies the stricter complete-answer verification layer.
+2. `legal_doc_tools.workflow.run_auto_legal_doc_amend_workflow(...)`
+   Runs the automatic DOCX amend workflow for uploaded or local documents.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1FqeNKsRJ7SV-iHiCS98y1nXHChPirUcW
+## Core backend modules
 
-## Run Locally
+- `gemini_service.py`: main answer-generation logic and prompt/routing policy.
+- `model_applicable_service.py`: provider-agnostic import surface for answer generation.
+- `backend_answer_runtime.py`: deterministic answer-shaping, continuation, and output-quality helpers.
+- `legal_doc_tools/workflow.py`: auto-amend workflow entrypoint.
+- `rag_service.py` and `knowledge_base.py`: retrieval/index support.
 
-**Prerequisites:**  Node.js
+## Quick start
 
+1. Create a Python environment and install `requirements.txt`.
+2. Configure the backend provider the user wants to use, for example `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `XAI_API_KEY`. Direct-code/backend requests can also fall back to the local Codex adapter when no usable provider key is configured and Codex CLI access is available.
+3. Call the backend functions directly from code or tests.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
-# legal-doc
- 
-# legal-bot
+## Example entrypoints
+
+```python
+from backend_answer_runtime import send_complete_answer_with_docs
+from legal_doc_tools.workflow import run_auto_legal_doc_amend_workflow
+```
+
+For legal answer and amend requests, indexed RAG retrieval is automatic and mandatory before generation. Complete answers return direct chat/API text by default; if the user explicitly asks for Markdown, the backend treats that as markdown-compatible direct text rather than a required file write. The backend instructions and test coverage remain in place. Only the frontend/UI layer was removed.

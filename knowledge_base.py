@@ -135,10 +135,10 @@ USAGE INSTRUCTIONS (MANDATORY):
    • Bioethics, medical law → Use "Biolaw" category documents
    • Mediation, ADR, dispute resolution → Use "International Commercial Mediation" category documents
 
-3. CITATION RULE: When referencing knowledge from this database, cite the document name using OSCOLA format. Example:
+3. CITATION RULE: By default, cite authorities drawn from this database using OSCOLA format. If the user explicitly requests another citation style such as Harvard, keep the authority but format the output in that requested style. Example default:
    [[{{"ref": "Caparo Industries plc v Dickman [1990] UKHL 2", "doc": "Tort law/Caparo case.pdf", "loc": ""}}]]
 
-4. OSCOLA GUIDE: The knowledge base includes the official OSCOLA 4th Edition referencing guide - use this for all citation formatting.
+4. OSCOLA GUIDE: The knowledge base includes the official OSCOLA 4th Edition referencing guide for the default legal citation path. If the user expressly asks for Harvard or another style, keep OSCOLA as the source-verification baseline but format the final answer in the requested style.
 
 5. CROSS-REFERENCE: For complex questions spanning multiple areas (e.g., "AI in employment discrimination"), draw from multiple relevant categories.
 

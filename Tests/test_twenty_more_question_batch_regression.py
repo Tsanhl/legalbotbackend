@@ -2,7 +2,7 @@
 Regression coverage for the additional 20-question internal test batch.
 """
 
-from gemini_service import _infer_retrieval_profile, _subissue_queries_for_unit
+from model_applicable_service import _infer_retrieval_profile, _subissue_queries_for_unit
 
 
 CASES = [

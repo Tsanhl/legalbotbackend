@@ -8,7 +8,7 @@ These assertions verify:
 4. the quality gate and subquery planner now reflect the fuller problem structure.
 """
 
-from gemini_service import (
+from model_applicable_service import (
     _backend_request_requires_mandatory_rag,
     _build_legal_answer_quality_gate,
     _infer_retrieval_profile,

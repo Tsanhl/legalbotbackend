@@ -105,12 +105,19 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         source = desktop / "essay.docx"
         _write_minimal_docx(source)
         output = desktop / "essay_amended_marked_final.docx"
+        project = root / "project"
+        project.mkdir()
 
         verification_path = root / "verification.json"
         authority_path = root / "authority.json"
         sentence_path = root / "sentences.json"
-        for path in (verification_path, authority_path, sentence_path):
+        notes_md = project / "topic_notes.md"
+        helper_py = project / "render_topic_notes.py"
+        draft_docx = project / "topic_notes.docx"
+        unrelated_readme = project / "README.md"
+        for path in (verification_path, authority_path, sentence_path, notes_md, helper_py, draft_docx):
             path.write_text("{}", encoding="utf-8")
+        unrelated_readme.write_text("keep", encoding="utf-8")
 
         # Monkeypatch validators so this regression only tests runtime cleanup/output guards.
         original_validate_authority = amend_docx._validate_authority_verification_report
@@ -126,14 +133,20 @@ with tempfile.TemporaryDirectory() as tmp_dir:
                     "verification_ledger_path": str(verification_path),
                     "authority_verification_report_path": str(authority_path),
                     "sentence_support_report_path": str(sentence_path),
+                    "cleanup_paths": [str(notes_md), str(helper_py), str(draft_docx), str(source), str(output)],
                     "review_context": _minimal_review_context(),
                 },
             )
             assert changed >= 1
+            assert source.exists()
             assert output.exists()
             assert not verification_path.exists()
             assert not authority_path.exists()
             assert not sentence_path.exists()
+            assert not notes_md.exists()
+            assert not helper_py.exists()
+            assert not draft_docx.exists()
+            assert unrelated_readme.exists()
         finally:
             amend_docx._validate_authority_verification_report = original_validate_authority
             amend_docx._validate_sentence_support_report = original_validate_sentence

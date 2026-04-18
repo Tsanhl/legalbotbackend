@@ -32,7 +32,7 @@ Automatically detects when the knowledge database is insufficient for answering 
    ```
 
 ### Implementation Details:
-- Function: `should_use_google_search_grounding(message, rag_context)` in `gemini_service.py`
+- Function: `should_use_google_search_grounding(message, rag_context)` in `model_applicable_service.py`
 - Returns: Detection result with reason and OSCOLA enforcement flag
 - Integration: Automatically adds contextual instructions to AI prompts when triggered
 
@@ -98,7 +98,7 @@ Para 4 - AMENDED:
 - Focuses improvement effort on those specific sections
 
 ### Implementation Details:
-- Function: `detect_specific_para_improvement(message)` in `gemini_service.py`
+- Function: `detect_specific_para_improvement(message)` in `model_applicable_service.py`
 - Detection patterns include:
   - Paragraph references: "para 1", "paragraph 2", "first para", "last para"
   - Improvement keywords: "which can be improved", "tell me which", "identify which"
@@ -111,7 +111,7 @@ Para 4 - AMENDED:
 ## Technical Architecture
 
 ### Files Modified:
-1. **gemini_service.py**:
+1. **model_applicable_service.py**:
    - Added `detect_specific_para_improvement()` function (lines 430+)
    - Added `should_use_google_search_grounding()` function (lines 513+)
    - Updated `SYSTEM_INSTRUCTION` with new mode instructions (lines 959-1020)

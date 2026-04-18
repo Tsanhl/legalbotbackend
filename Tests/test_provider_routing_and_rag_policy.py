@@ -1,4 +1,4 @@
-from gemini_service import (
+from model_applicable_service import (
     _backend_request_requires_mandatory_rag,
     _build_backend_rag_requirement_block,
     detect_provider_from_api_key,

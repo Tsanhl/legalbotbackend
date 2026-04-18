@@ -49,7 +49,6 @@ try:
         _paragraph_is_simple,
         _paragraph_contains_effective_italics,
         _paragraph_text_all_runs,
-        _prune_output_versions,
         _require_desktop_root_output,
         _reference_insert_index_for_text_pos,
         _require_markup_enabled,
@@ -97,7 +96,6 @@ except ImportError:
         _paragraph_is_simple,
         _paragraph_contains_effective_italics,
         _paragraph_text_all_runs,
-        _prune_output_versions,
         _require_desktop_root_output,
         _reference_insert_index_for_text_pos,
         _require_markup_enabled,
@@ -131,6 +129,7 @@ def _one_off_temp_dirs() -> set[Path]:
 
 
 ONE_OFF_TEMP_DIRS = _one_off_temp_dirs()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.resolve()
 TRUTHY_REVIEW_VALUES = {"1", "true", "yes", "y", "done", "complete", "completed", "checked", "verified"}
 URL_IN_ANGLE_BRACKETS_RE = re.compile(r"<(https?://[^<>\s]+)>")
 RAW_URL_RE = re.compile(r"(?<!<)(?<!://)\b(?:https?://|www\.)\S+")
@@ -186,6 +185,38 @@ DOC_SPECIFIC_ONE_OFF_CLEANUP_CONFIG_KEYS: tuple[str, ...] = (
     "one_off_test_paths",
     "one_off_helper_test_path",
     "one_off_helper_test_paths",
+)
+ONE_OFF_WORKSPACE_FILE_SUFFIXES: tuple[str, ...] = (
+    ".docx",
+    ".doc",
+    ".md",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".py",
+)
+ONE_OFF_WORKSPACE_NAME_HINTS: tuple[str, ...] = (
+    "one_off",
+    "one-off",
+    "doc_specific",
+    "doc-specific",
+    "question",
+    "rubric",
+    "context",
+    "prompt",
+    "instruction",
+    "helper",
+    "test",
+    "draft",
+    "temp",
+    "tmp",
+    "notes",
+    "ledger",
+    "verification",
+    "artifact",
+    "render",
+    "report",
 )
 AMEND_REQUIRED_TRUE_FLAGS: tuple[tuple[str, str], ...] = (
     ("content_checked", "content sentence-by-sentence review"),
@@ -441,6 +472,37 @@ def _is_one_off_artifact(path: Optional[Path]) -> bool:
     return any(_path_is_within(resolved, temp_dir) for temp_dir in ONE_OFF_TEMP_DIRS)
 
 
+def _name_has_one_off_hint(path: Path) -> bool:
+    low = path.name.casefold()
+    return any(hint in low for hint in ONE_OFF_WORKSPACE_NAME_HINTS)
+
+
+def _is_workspace_one_off_artifact(path: Optional[Path]) -> bool:
+    if path is None:
+        return False
+    resolved = path.expanduser().resolve()
+    if resolved == PROJECT_ROOT or not _path_is_within(resolved, PROJECT_ROOT):
+        return False
+
+    relevant_nodes = [resolved, *resolved.parents]
+    if resolved.is_dir():
+        return any(
+            node != PROJECT_ROOT and _path_is_within(node, PROJECT_ROOT) and _name_has_one_off_hint(node)
+            for node in relevant_nodes
+        )
+
+    if resolved.suffix.lower() not in ONE_OFF_WORKSPACE_FILE_SUFFIXES:
+        return False
+    return any(
+        node != PROJECT_ROOT and _path_is_within(node, PROJECT_ROOT) and _name_has_one_off_hint(node)
+        for node in relevant_nodes
+    )
+
+
+def _is_cleanup_candidate(path: Optional[Path]) -> bool:
+    return _is_one_off_artifact(path) or _is_workspace_one_off_artifact(path)
+
+
 def _string_path_list(values: Any) -> list[Path]:
     if values is None:
         return []
@@ -461,19 +523,26 @@ def _collect_cleanup_config_paths(config: dict[str, Any], *keys: str) -> list[Pa
     return paths
 
 
-def _cleanup_one_off_artifacts(paths: list[Path]) -> int:
+def _cleanup_one_off_artifacts(paths: list[Path], *, protected_paths: Optional[list[Path]] = None) -> int:
     seen: set[Path] = set()
     removed = 0
+    protected_nodes = {
+        p.expanduser().resolve()
+        for p in (protected_paths or [])
+        if p is not None
+    }
     protected_dirs = {
         Path.home().resolve(),
         DESKTOP_ROOT.expanduser().resolve(),
-        Path(__file__).resolve().parent.parent.resolve(),
+        PROJECT_ROOT,
     }
     for path in paths:
         resolved = path.expanduser().resolve()
         if resolved in seen:
             continue
         seen.add(resolved)
+        if resolved in protected_nodes:
+            continue
         if resolved.is_dir():
             if resolved in protected_dirs:
                 continue
@@ -518,13 +587,13 @@ def _collect_one_off_cleanup_targets(
         include_question_guidance_report=True,
     )
 
-    if _is_one_off_artifact(config_path):
+    if _is_cleanup_candidate(config_path):
         cleanup_targets.append(config_path)
-    if question_path is not None and _is_one_off_artifact(question_path):
+    if question_path is not None and _is_cleanup_candidate(question_path):
         cleanup_targets.append(question_path)
-    if rubric_path is not None and _is_one_off_artifact(rubric_path):
+    if rubric_path is not None and _is_cleanup_candidate(rubric_path):
         cleanup_targets.append(rubric_path)
-    if context_out_path is not None and _is_one_off_artifact(context_out_path):
+    if context_out_path is not None and _is_cleanup_candidate(context_out_path):
         cleanup_targets.append(context_out_path)
 
     return cleanup_targets
@@ -537,8 +606,15 @@ def _collect_embedded_one_off_cleanup_targets(config: dict[str, Any]) -> list[Pa
     )
 
 
-def _cleanup_embedded_one_off_artifacts(config: dict[str, Any]) -> int:
-    return _cleanup_one_off_artifacts(_collect_embedded_one_off_cleanup_targets(config))
+def _cleanup_embedded_one_off_artifacts(
+    config: dict[str, Any],
+    *,
+    protected_paths: Optional[list[Path]] = None,
+) -> int:
+    return _cleanup_one_off_artifacts(
+        _collect_embedded_one_off_cleanup_targets(config),
+        protected_paths=protected_paths,
+    )
 
 
 def _lint_oscola_online_citation_text(text: str, *, context: str, bibliography_entry: bool) -> None:
@@ -976,6 +1052,8 @@ def _cleanup_one_off_artifacts_after_amend(
     question_path: Optional[Path],
     rubric_path: Optional[Path],
     context_out_path: Optional[Path],
+    source_path: Optional[Path] = None,
+    output_path: Optional[Path] = None,
 ) -> int:
     return _cleanup_one_off_artifacts(
         _collect_one_off_cleanup_targets(
@@ -984,7 +1062,8 @@ def _cleanup_one_off_artifacts_after_amend(
             question_path=question_path,
             rubric_path=rubric_path,
             context_out_path=context_out_path,
-        )
+        ),
+        protected_paths=[source_path, output_path],
     )
 
 
@@ -1775,7 +1854,10 @@ def apply_amendments(
 
     _write_docx_with_replaced_parts(source, output, parts_to_write)
     _assert_markup_detectable(source, output, changed)
-    _cleanup_embedded_one_off_artifacts(config)
+    _cleanup_embedded_one_off_artifacts(
+        config,
+        protected_paths=[source, output],
+    )
     return changed, config.get("review_context") or {}
 
 
@@ -1791,10 +1873,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--output",
         type=Path,
         help=(
-            "Requested amended output DOCX path. The amend flow always writes to the canonical "
-            "Desktop final path for the source (<source>_amended_marked_final.docx). "
-            "Any other requested filename is normalized back to that canonical final path and "
-            "the final system output is overwritten. The original source DOCX is never overwritten."
+            "Requested amended output DOCX path. The amend flow always writes to a protected "
+            "Desktop final path for the source (<source>_amended_marked_final.docx, then _v2, "
+            "_v3, etc. if prior amended finals already exist). Any other requested filename is "
+            "normalized back to that Desktop output policy. The original source DOCX is never overwritten."
         ),
     )
     parser.add_argument("--config", type=Path, required=True, help="Path to the JSON amendment config.")
@@ -1819,9 +1901,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     _require_desktop_root_output(output)
     requested_output = output
     if normalized_output:
-        print(f"[OUTPUT] Requested output path normalized to canonical final DOCX: {requested_output}")
-    if requested_output.exists():
-        print(f"[OUTPUT] Existing final DOCX will be replaced: {requested_output}")
+        print(f"[OUTPUT] Requested output path normalized to protected Desktop final DOCX: {requested_output}")
 
     try:
         config = _load_config(config_path)
@@ -1855,15 +1935,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         question_path=args.question_file.expanduser().resolve() if args.question_file is not None else None,
         rubric_path=args.rubric_file.expanduser().resolve() if args.rubric_file is not None else None,
         context_out_path=args.context_out.expanduser().resolve() if args.context_out is not None else None,
+        source_path=source,
+        output_path=output,
     )
-
-    removed_versions = _prune_output_versions(requested_output)
 
     print(f"[amend] wrote {output}")
     print(f"[amend] changed items detected: {changed}")
     print(f"[amend] one-off artifacts cleaned: {removed_one_off_artifacts}")
-    if removed_versions:
-        print(f"[OUTPUT] Removed older versioned outputs: {removed_versions}")
     return 0
 
 

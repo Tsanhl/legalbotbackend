@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from gemini_service import (
+from model_applicable_service import (
     _build_legal_answer_quality_gate,
     _infer_retrieval_profile,
     detect_essay_core_policy_violation,
@@ -28,7 +28,7 @@ from gemini_service import (
 )
 
 
-SOURCE = Path("gemini_service.py").read_text(encoding="utf-8")
+SOURCE = Path("model_applicable_service.py").read_text(encoding="utf-8")
 
 
 def _extract_literal_dict(anchor: str):

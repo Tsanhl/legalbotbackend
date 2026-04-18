@@ -173,6 +173,42 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     desktop.mkdir()
     source = desktop / "essay.docx"
     _write_docx_with_footnote(source)
+    (desktop / "essay_amended_marked_final.docx").write_bytes(b"prior-final")
+
+    original_workflow_desktop = workflow.DESKTOP_ROOT
+    original_refine_desktop = refine.DESKTOP_ROOT
+    original_amend_desktop = amend_docx.DESKTOP_ROOT
+    original_gate_desktop = delivery_gates.DESKTOP_ROOT
+    original_send = workflow.send_message_with_docs
+
+    workflow.DESKTOP_ROOT = desktop
+    refine.DESKTOP_ROOT = desktop
+    amend_docx.DESKTOP_ROOT = desktop
+    delivery_gates.DESKTOP_ROOT = desktop
+    workflow.send_message_with_docs = lambda *args, **kwargs: ((_strict_response(), None), None)
+    try:
+        result = workflow.run_local_legal_doc_amend_workflow(
+            api_key="test-key",
+            source_path=source,
+            message="Please amend this to a 90+ standard. Question: Critically analyse whether the doctrine is coherent.",
+        )
+        assert result.output_path == desktop / "essay_amended_marked_final_v2.docx"
+        assert result.output_path.exists()
+        assert (desktop / "essay_amended_marked_final.docx").read_bytes() == b"prior-final"
+    finally:
+        workflow.DESKTOP_ROOT = original_workflow_desktop
+        refine.DESKTOP_ROOT = original_refine_desktop
+        amend_docx.DESKTOP_ROOT = original_amend_desktop
+        delivery_gates.DESKTOP_ROOT = original_gate_desktop
+        workflow.send_message_with_docs = original_send
+
+
+with tempfile.TemporaryDirectory() as tmp_dir:
+    root = Path(tmp_dir)
+    desktop = (root / "Desktop").resolve()
+    desktop.mkdir()
+    source = desktop / "essay.docx"
+    _write_docx_with_footnote(source)
 
     original_workflow_desktop = workflow.DESKTOP_ROOT
     original_refine_desktop = refine.DESKTOP_ROOT

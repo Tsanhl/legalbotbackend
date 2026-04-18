@@ -5,7 +5,9 @@ The project is backend-only now. Use the Python services directly instead of a f
 ## Main entrypoints
 
 - `backend_answer_runtime.send_complete_answer_with_docs(...)`
-  Canonical backend complete-answer path. Defaults to direct/backend delivery, keeps legal RAG and code-guide routing active, and runs the stricter complete-answer verification layer.
+  Canonical backend complete-answer path. Defaults to direct/backend delivery, keeps legal RAG and code-guide routing active, runs the stricter complete-answer verification layer, and can now honour chat / `.md` / `.docx` delivery requests from the same path.
+- `backend_answer_runtime.send_complete_answer_with_output(...)`
+  Canonical delivery wrapper. Chat output, project `.md` files, and Desktop `.docx` files all derive from the same backend-generated and verified answer text, and registered one-off helper artifacts can be cleaned after a successful answer run.
 - `legal_doc_tools.workflow.run_auto_legal_doc_amend_workflow(...)`
   Automatic amend pipeline for uploaded or local DOCX files.
 
@@ -17,7 +19,6 @@ The project is backend-only now. Use the Python services directly instead of a f
 
 ## Relevant backend files
 
-- `gemini_service.py`
 - `model_applicable_service.py`
 - `backend_answer_runtime.py`
 - `legal_doc_tools/workflow.py`
@@ -25,4 +26,4 @@ The project is backend-only now. Use the Python services directly instead of a f
 
 ## Validation
 
-Use the backend regression tests in `Tests/` to verify the answer and amend flows after changes. Legal answer and amend requests automatically run through indexed RAG before generation. Complete answers return direct text by default; explicit Markdown requests are treated as markdown-compatible direct output rather than mandatory `.md` file generation.
+Use the backend regression tests in `Tests/` to verify the answer and amend flows after changes. Legal answer and amend requests automatically run through indexed RAG before generation. Complete answers return direct text by default; if you need a saved `.md` or `.docx`, either complete-answer entrypoint keeps the same backend answer pipeline and renders the artifact from that verified answer.

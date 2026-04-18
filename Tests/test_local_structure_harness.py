@@ -5,7 +5,7 @@ No model/API calls.
 
 from collections import defaultdict
 
-from gemini_service import (
+from model_applicable_service import (
     _build_single_question_long_part_guidance,
     _expected_internal_part_heading_from_history,
     _finalize_model_output_text,
@@ -498,7 +498,7 @@ The law balances strict duties with practical management.
     assert empty_part_violation[0] is True
     assert "part heading" in empty_part_violation[1].lower()
 
-    with open("gemini_service.py", "r", encoding="utf-8") as fh:
+    with open("model_applicable_service.py", "r", encoding="utf-8") as fh:
         src = fh.read()
     assert "A. [subtitle] / B. [subtitle] / C. [subtitle] / D. [subtitle]" in src
     assert "Each question/unit has its OWN independent Part numbering (Part I, Part II, etc.) - do NOT continue numbering from a previous question." in src

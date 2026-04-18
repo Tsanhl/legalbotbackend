@@ -8,7 +8,7 @@ These focus on the bug classes repeatedly seen in real prompts:
 - explicit by-section split prompts
 """
 
-from gemini_service import detect_long_essay
+from model_applicable_service import detect_long_essay
 from backend_answer_runtime import (
     _current_unit_mode_from_history,
     _expected_internal_part_heading_from_history,

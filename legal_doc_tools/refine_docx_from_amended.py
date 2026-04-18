@@ -508,8 +508,34 @@ def _resolve_latest_amendable_source(path: Path) -> tuple[Path, bool]:
     return latest, latest != resolved
 
 
+def _system_output_version(path: Path, root_stem: str) -> int:
+    resolved = path.expanduser().resolve()
+    canonical = DESKTOP_ROOT / f"{root_stem}{FINAL_OUTPUT_SUFFIX}"
+    if resolved == canonical:
+        return 1
+    m = re.search(r"_v(\d+)\.docx$", resolved.name, flags=re.IGNORECASE)
+    if m:
+        return max(1, int(m.group(1)))
+    return 1
+
+
+def _next_versioned_output_path(original_path: Path) -> Path:
+    root_stem = _root_stem_for_source(original_path)
+    canonical = _expected_final_output_path(original_path)
+    candidates = list(_iter_system_outputs_for_root(root_stem))
+    if not candidates and not canonical.exists():
+        return canonical
+
+    highest = 1
+    for candidate in candidates:
+        highest = max(highest, _system_output_version(candidate, root_stem))
+    if canonical.exists():
+        highest = max(highest, 1)
+    return DESKTOP_ROOT / f"{root_stem}{FINAL_OUTPUT_STEM_SUFFIX}_v{highest + 1}.docx"
+
+
 def _normalize_to_final_output_path(original_path: Path, requested_path: Optional[Path]) -> tuple[Path, bool]:
-    expected = _expected_final_output_path(original_path)
+    expected = _next_versioned_output_path(original_path)
     if requested_path is None:
         return expected, False
     requested = requested_path.expanduser().resolve()
@@ -535,21 +561,10 @@ def _copy_source_to_temp_if_same_as_output(source_path: Path, output_path: Path)
 
 
 def _prune_output_versions(path: Path) -> int:
-    root_stem = _root_stem_for_source(path)
-    keep = path.expanduser().resolve()
-    removed = 0
-    for candidate in list(_iter_system_outputs_for_root(root_stem)):
-        resolved = candidate.expanduser().resolve()
-        if resolved == keep:
-            continue
-        if not re.search(r"_v\d+\.docx$", resolved.name, flags=re.IGNORECASE):
-            continue
-        try:
-            resolved.unlink()
-            removed += 1
-        except OSError:
-            continue
-    return removed
+    # Non-destructive output policy: preserve prior amended Desktop outputs.
+    # This helper is retained for backwards compatibility but no longer removes
+    # any files.
+    return 0
 
 def _set_yellow_highlight_markup(rPr: etree._Element) -> None:
     highlight = rPr.find("w:highlight", namespaces=NS)
@@ -4418,11 +4433,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--out",
         type=Path,
         help=(
-            "Output DOCX path. The refine flow always writes to the canonical Desktop "
-            "final path for the source (<original>_amended_marked_final.docx). "
-            "If omitted, that canonical final path is used. Any other requested filename "
-            "is normalized back to the canonical final path and that final system output "
-            "is overwritten. The original source DOCX is never overwritten."
+            "Output DOCX path. The refine flow always writes to a Desktop final path for "
+            "the source (<original>_amended_marked_final.docx, then _v2, _v3, etc. if a "
+            "prior final output already exists). Any other requested filename is normalized "
+            "back to that protected Desktop output policy. The original source DOCX is never overwritten."
         ),
     )
     ap.add_argument(
@@ -4462,9 +4476,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     requested_out = args.out
     if normalized_output:
-        print(f"[OUTPUT] Requested output path normalized to canonical final DOCX: {requested_out}")
-    if requested_out.exists():
-        print(f"[OUTPUT] Existing final DOCX will be replaced: {requested_out}")
+        print(f"[OUTPUT] Requested output path normalized to protected Desktop final DOCX: {requested_out}")
 
     try:
         if args.amended is not None:
@@ -4482,9 +4494,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             shutil.rmtree(temp_original_dir, ignore_errors=True)
     print(f"Wrote: {args.out}")
     print(f"Paragraphs updated: {changed}")
-    removed_versions = _prune_output_versions(requested_out)
-    if removed_versions:
-        print(f"[OUTPUT] Removed older versioned outputs: {removed_versions}")
     if skipped:
         print(f"Paragraphs skipped (complex structures): {skipped}", file=sys.stderr)
     return 0

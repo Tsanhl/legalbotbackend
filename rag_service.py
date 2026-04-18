@@ -4929,7 +4929,7 @@ class RAGService:
         """
         Get relevant context for a query in a format suitable for LLM prompting.
 
-        This is the main API used by gemini_service.py
+        This is the main API used by model_applicable_service.py
 
         Args:
             query: The user's question

@@ -14,10 +14,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from gemini_service import _infer_retrieval_profile, _subissue_queries_for_unit
+from model_applicable_service import _infer_retrieval_profile, _subissue_queries_for_unit
 
 
-SOURCE = Path("gemini_service.py").read_text(encoding="utf-8")
+SOURCE = Path("model_applicable_service.py").read_text(encoding="utf-8")
 
 
 def _extract_literal_dict(anchor: str):

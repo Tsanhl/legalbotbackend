@@ -10,9 +10,12 @@ import os
 import re
 import bisect
 import math
+import shutil
+import tempfile
 from collections import Counter
 from difflib import SequenceMatcher
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 import uuid
 
@@ -46,14 +49,18 @@ from model_applicable_service import (
     strip_internal_reasoning
 )
 try:
-    from gemini_service import (
+    from model_applicable_service import (
         _backend_request_requires_mandatory_rag,
+        detect_topic_notes_request,
         _infer_retrieval_profile,
         _subissue_queries_for_unit,
+        register_topic_notes_cleanup_paths,
     )
 except Exception:
     _backend_request_requires_mandatory_rag = None
+    detect_topic_notes_request = None
     _infer_retrieval_profile = None
+    register_topic_notes_cleanup_paths = None
     _subissue_queries_for_unit = None
 
 try:
@@ -77,7 +84,32 @@ except Exception as e:
 
 BACKEND_ANSWER_OUTPUT_CHAT = "chat"
 BACKEND_ANSWER_OUTPUT_MARKDOWN = "markdown"
+BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT = "markdown_artifact"
+BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT = "docx_artifact"
 BACKEND_COMPLETE_ANSWER_REGEN_MAX_ATTEMPTS = 1
+BACKEND_ANSWER_ARTIFACT_DESKTOP_ROOT = (Path.home() / "Desktop").resolve()
+BACKEND_ANSWER_ONE_OFF_HINTS = (
+    "one_off",
+    "one-off",
+    "tmp",
+    "temp",
+    "scratch",
+    "draft",
+    "helper",
+    "context_dump",
+    "prompt_dump",
+    "question_pack",
+)
+BACKEND_ANSWER_ONE_OFF_SUFFIXES = {
+    ".txt",
+    ".md",
+    ".json",
+    ".docx",
+    ".csv",
+    ".log",
+    ".tmp",
+    ".prompt",
+}
 
 
 def resolve_backend_answer_output_mode(
@@ -100,6 +132,15 @@ def resolve_backend_answer_output_mode(
         "direct": BACKEND_ANSWER_OUTPUT_CHAT,
         "markdown": BACKEND_ANSWER_OUTPUT_MARKDOWN,
         "md": BACKEND_ANSWER_OUTPUT_MARKDOWN,
+        "markdownartifact": BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
+        "markdownfile": BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
+        "mdartifact": BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
+        "mdfile": BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
+        "docx": BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+        "word": BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+        "worddoc": BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+        "worddocument": BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+        "documentfile": BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
     }
     if explicit in explicit_map:
         return explicit_map[explicit]
@@ -114,7 +155,69 @@ def resolve_backend_answer_output_mode(
     return BACKEND_ANSWER_OUTPUT_CHAT
 
 
+def resolve_backend_answer_delivery_mode(
+    prompt_text: str = "",
+    output_mode: Optional[str] = None,
+) -> str:
+    """
+    Resolve the final delivery mode for backend complete answers.
+
+    Distinguishes between:
+    - direct chat/API text,
+    - direct markdown-compatible text,
+    - a saved markdown artifact in the project/workspace, and
+    - a saved DOCX artifact on Desktop.
+    """
+    explicit = re.sub(r"[^a-z]", "", (output_mode or "").strip().lower())
+    explicit_map = {
+        "chat": BACKEND_ANSWER_OUTPUT_CHAT,
+        "api": BACKEND_ANSWER_OUTPUT_CHAT,
+        "text": BACKEND_ANSWER_OUTPUT_CHAT,
+        "direct": BACKEND_ANSWER_OUTPUT_CHAT,
+        "markdown": BACKEND_ANSWER_OUTPUT_MARKDOWN,
+        "md": BACKEND_ANSWER_OUTPUT_MARKDOWN,
+        "markdownartifact": BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
+        "markdownfile": BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
+        "mdartifact": BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
+        "mdfile": BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
+        "docx": BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+        "word": BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+        "worddoc": BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+        "worddocument": BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+        "documentfile": BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+    }
+    if explicit in explicit_map:
+        return explicit_map[explicit]
+
+    low = (prompt_text or "").lower()
+    artifact_verbs = ("save", "create", "export", "write", "generate", "put")
+    mentions_file_location = any(term in low for term in ("file", "project", "workspace", "desktop", "folder"))
+
+    if any(term in low for term in (".docx", "word document", "word doc")):
+        if mentions_file_location or any(verb in low for verb in artifact_verbs):
+            return BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT
+
+    if ".md" in low:
+        if mentions_file_location or any(verb in low for verb in artifact_verbs):
+            return BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT
+    if any(term in low for term in ("markdown file", "md file")):
+        if mentions_file_location or any(verb in low for verb in artifact_verbs):
+            return BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT
+
+    return resolve_backend_answer_output_mode(prompt_text, output_mode=output_mode)
+
+
 def _backend_answer_output_instruction(output_mode: str) -> str:
+    if output_mode == BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT:
+        return (
+            "Return the final answer directly as clean markdown-compatible text suitable for DOCX rendering. "
+            "Do NOT create or save the `.docx` file inside the model response; the runtime will create the artifact."
+        )
+    if output_mode == BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT:
+        return (
+            "Return the final answer directly as clean markdown-compatible text. "
+            "Do NOT create or save the `.md` file inside the model response; the runtime will create the artifact."
+        )
     if output_mode == BACKEND_ANSWER_OUTPUT_MARKDOWN:
         return (
             "Return the final answer directly in markdown-compatible text in the response body. "
@@ -124,6 +227,267 @@ def _backend_answer_output_instruction(output_mode: str) -> str:
         "Return the final answer directly in the response body for chat/API delivery. "
         "Do NOT create or save a file unless the caller separately asks for an artifact."
     )
+
+
+def _suggest_complete_answer_artifact_stem(prompt_text: str, project_id: str = "") -> str:
+    candidates: List[str] = []
+    for raw_line in (prompt_text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        low = line.lower()
+        if re.fullmatch(r"\d+\s+words?\.?", low):
+            continue
+        if low.startswith("in your answer") or low.startswith("advise the parties"):
+            continue
+        candidates.append(line)
+        if len(candidates) >= 3:
+            break
+
+    seed = candidates[0] if candidates else (project_id or "backend_answer")
+    seed = re.sub(r"[^\w\s-]", " ", seed, flags=re.UNICODE)
+    seed = re.sub(r"[\s_-]+", "_", seed).strip("_").lower()
+    return (seed[:80] or "backend_answer").strip("_") or "backend_answer"
+
+
+def _resolve_complete_answer_artifact_path(
+    *,
+    delivery_mode: str,
+    prompt_text: str,
+    project_id: str,
+    artifact_path: Optional[str] = None,
+) -> Path:
+    expected_suffix = ".docx" if delivery_mode == BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT else ".md"
+    default_root = (
+        BACKEND_ANSWER_ARTIFACT_DESKTOP_ROOT
+        if delivery_mode == BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT
+        else Path.cwd()
+    )
+
+    if artifact_path:
+        path = Path(str(artifact_path)).expanduser()
+        if not path.is_absolute():
+            path = default_root / path
+    else:
+        stem = _suggest_complete_answer_artifact_stem(prompt_text, project_id=project_id)
+        path = default_root / f"{stem}_backend_answer{expected_suffix}"
+
+    if path.suffix.lower() != expected_suffix:
+        path = path.with_suffix(expected_suffix)
+    return path.resolve()
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _backend_answer_name_has_one_off_hint(path: Path) -> bool:
+    low = path.name.lower().replace(" ", "_")
+    return any(hint in low for hint in BACKEND_ANSWER_ONE_OFF_HINTS)
+
+
+def _normalize_complete_answer_cleanup_paths(paths: Optional[List[Any]]) -> List[Path]:
+    normalized: List[Path] = []
+    for path in paths or []:
+        if path is None:
+            continue
+        try:
+            normalized.append(Path(str(path)).expanduser().resolve())
+        except Exception:
+            continue
+    return normalized
+
+
+def _is_complete_answer_cleanup_candidate(path: Path) -> bool:
+    resolved = path.expanduser().resolve()
+    project_root = Path.cwd().resolve()
+    desktop_root = BACKEND_ANSWER_ARTIFACT_DESKTOP_ROOT.expanduser().resolve()
+    home_root = Path.home().resolve()
+
+    if resolved in {project_root, desktop_root, home_root}:
+        return False
+
+    try:
+        temp_root = Path(tempfile.gettempdir()).resolve()
+    except Exception:
+        temp_root = Path("/tmp").resolve()
+    temp_roots = {temp_root, Path("/tmp").resolve()}
+
+    if any(_path_is_within(resolved, root) for root in temp_roots):
+        return True
+
+    relevant_nodes = [resolved, *resolved.parents]
+    if resolved.is_dir():
+        return any(
+            node != project_root
+            and _path_is_within(node, project_root)
+            and _backend_answer_name_has_one_off_hint(node)
+            for node in relevant_nodes
+        )
+
+    if resolved.suffix.lower() not in BACKEND_ANSWER_ONE_OFF_SUFFIXES:
+        return False
+
+    return any(
+        node != project_root
+        and _path_is_within(node, project_root)
+        and _backend_answer_name_has_one_off_hint(node)
+        for node in relevant_nodes
+    )
+
+
+def _cleanup_complete_answer_one_off_artifacts(
+    paths: Optional[List[Any]],
+    *,
+    protected_paths: Optional[List[Any]] = None,
+) -> int:
+    seen: set[Path] = set()
+    removed = 0
+    protected_nodes = {
+        Path(str(path)).expanduser().resolve()
+        for path in (protected_paths or [])
+        if path is not None
+    }
+    protected_dirs = {
+        Path.home().resolve(),
+        BACKEND_ANSWER_ARTIFACT_DESKTOP_ROOT.expanduser().resolve(),
+        Path.cwd().resolve(),
+    }
+
+    for resolved in _normalize_complete_answer_cleanup_paths(paths):
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved in protected_nodes:
+            continue
+        if not _is_complete_answer_cleanup_candidate(resolved):
+            continue
+        if resolved.is_dir():
+            if resolved in protected_dirs:
+                continue
+            try:
+                shutil.rmtree(resolved, ignore_errors=False)
+                removed += 1
+            except OSError:
+                continue
+            continue
+        try:
+            resolved.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def _render_complete_answer_artifact_text(answer_text: str) -> str:
+    text = _strip_generation_artifacts(answer_text or "")
+    text = _normalize_output_style(text)
+    text = _restore_paragraph_separation(text)
+    return text.strip()
+
+
+def _write_complete_answer_docx(text: str, output_path: Path) -> None:
+    try:
+        from legal_doc_tools.generate_review_report_docx import build_docx
+
+        build_docx(text, output_path)
+        return
+    except Exception:
+        from docx import Document
+
+        doc = Document()
+        for block in [b.strip() for b in re.split(r"\n\s*\n", text or "") if b.strip()]:
+            if re.match(r"(?im)^part\s+[ivxlcdm0-9]+\s*:", block):
+                doc.add_heading(block, level=1)
+                continue
+            if re.match(r"(?im)^[a-d]\.\s+", block):
+                doc.add_heading(block, level=2)
+                continue
+            lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+            if len(lines) == 1 and lines[0].startswith("- "):
+                doc.add_paragraph(lines[0][2:].strip(), style="List Bullet")
+                continue
+            doc.add_paragraph("\n".join(lines) if lines else block)
+        doc.save(output_path)
+
+
+def write_complete_answer_artifact(
+    answer_text: str,
+    *,
+    delivery_mode: str,
+    prompt_text: str = "",
+    project_id: str = "",
+    artifact_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Persist a complete answer artifact from the already-generated backend answer.
+
+    This must only run after the canonical backend answer pipeline finishes, so
+    chat/API, markdown files, and DOCX files all derive from the same verified
+    answer text.
+    """
+    if delivery_mode not in {
+        BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
+        BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+    }:
+        return None
+
+    output_path = _resolve_complete_answer_artifact_path(
+        delivery_mode=delivery_mode,
+        prompt_text=prompt_text,
+        project_id=project_id,
+        artifact_path=artifact_path,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    text = _render_complete_answer_artifact_text(answer_text)
+
+    if delivery_mode == BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT:
+        body = text if text.endswith("\n") else f"{text}\n"
+        output_path.write_text(body, encoding="utf-8")
+    else:
+        _write_complete_answer_docx(text, output_path)
+
+    return {
+        "mode": delivery_mode,
+        "path": str(output_path),
+    }
+
+
+def _attach_complete_answer_artifact_meta(
+    response_meta: Any,
+    artifact_info: Optional[Dict[str, Any]],
+) -> Any:
+    if not artifact_info:
+        return response_meta
+    wrapped = {"backend_answer_artifact": artifact_info}
+    if response_meta is None or response_meta == "":
+        return [wrapped]
+    if isinstance(response_meta, dict):
+        merged = dict(response_meta)
+        merged["backend_answer_artifact"] = artifact_info
+        return merged
+    if isinstance(response_meta, list):
+        cleaned = [
+            item for item in response_meta
+            if not (isinstance(item, dict) and "backend_answer_artifact" in item)
+        ]
+        return [*cleaned, wrapped]
+    return [response_meta, wrapped]
+
+
+def _extract_complete_answer_artifact_meta(response_meta: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(response_meta, dict):
+        info = response_meta.get("backend_answer_artifact")
+        return info if isinstance(info, dict) else None
+    if isinstance(response_meta, list):
+        for item in response_meta:
+            if isinstance(item, dict) and isinstance(item.get("backend_answer_artifact"), dict):
+                return item["backend_answer_artifact"]
+    return None
 
 
 def _looks_like_backend_complete_answer_request(
@@ -248,6 +612,99 @@ def _missing_profile_prompt_map_asks(answer_text: str, prompt_text: str) -> List
     return [m for m in missing if m]
 
 
+def _complete_answer_sentence_support_issues(answer_text: str) -> List[str]:
+    """
+    Deterministic sentence-support verification for complete answers.
+
+    This mirrors the amend workflow's stricter expectation that argumentative
+    propositions should be individually supported, while using lightweight text
+    heuristics suitable for plain-answer output.
+    """
+    txt = _strip_generation_artifacts(answer_text or "").strip()
+    if not txt:
+        return []
+
+    sentence_candidates = re.split(r"(?<=[.!?])\s+", txt)
+    missing: List[str] = []
+
+    legal_signal_terms = {
+        "act", "acts", "article", "articles", "authority", "authorities", "breach",
+        "breaches", "claim", "claims", "conclusion", "court", "courts", "damages",
+        "defence", "duty", "duties", "exercise", "grave", "habitual", "harm", "law",
+        "legal", "liable", "liability", "likely", "negligence", "remedy", "remedies",
+        "residence", "retention", "return", "right", "rights", "risk", "settled",
+        "settlement", "should", "statute", "statutory", "undertakings", "wrongful",
+        "custody", "objections", "resident", "residence", "jurisdiction", "means",
+        "requires", "prevent", "prevents", "permits", "therefore", "because",
+        "arguably", "better", "view", "must", "would", "may", "under",
+    }
+
+    case_pat = re.compile(
+        r"\b([A-Z][A-Za-z0-9'’.\-]*(?:\s+[A-Za-z][A-Za-z0-9'’.\-]*){0,10})\s+v\.?\s+"
+        r"([A-Z][A-Za-z0-9'’.\-]*(?:\s+[A-Za-z][A-Za-z0-9'’.\-]*){0,10})\b"
+    )
+    inline_oscola_pat = re.compile(
+        r"\([^()\n]{3,260}(?:\[[12]\d{3}\]|Act\s+\d{4}|Article\s+\d+(?:\(\d+\))?|section\s+\d+|s\.?\s*\d+)",
+        flags=re.IGNORECASE,
+    )
+    harvard_pat = re.compile(
+        r"\((?:[A-Z][A-Za-z&.\-'\s]{1,80}|[A-Z][A-Za-z][^()\n]{0,100}),\s*(?:\d{4}[a-z]?|n\.d\.|no date)(?:,\s*(?:p{1,2}\.|para\.?)\s*[^)]+)?\)",
+    )
+
+    def _is_heading_like(s: str) -> bool:
+        stripped = (s or "").strip()
+        return bool(
+            re.match(
+                r"(?im)^(?:question\s+\d+\s*:|part\s+[ivxlcdm0-9]+\s*:|[A-D]\.\s+\w+|\(end of answer\)|will continue\b)",
+                stripped,
+            )
+        )
+
+    def _looks_argumentative(s: str) -> bool:
+        stripped = (s or "").strip()
+        if not stripped or _is_heading_like(stripped):
+            return False
+        if stripped.startswith("(") and stripped.endswith(")"):
+            return False
+        words = re.findall(r"\b[A-Za-z][A-Za-z'’/-]*\b", stripped)
+        if len(words) < 8:
+            return False
+        lower_words = {w.lower() for w in words}
+        if lower_words & legal_signal_terms:
+            return True
+        if case_pat.search(stripped):
+            return True
+        if re.search(r"\b[A-Z][A-Za-z ,&()'-]+ Act \d{4}\b", stripped):
+            return True
+        if re.search(r"\bArticle\s+\d+(?:\(\d+\))?\b", stripped, flags=re.IGNORECASE):
+            return True
+        if re.search(r"\b(?:section|s\.?)\s*\d+[a-z]?(?:\(\d+\))?\b", stripped, flags=re.IGNORECASE):
+            return True
+        return False
+
+    def _has_inline_support(s: str) -> bool:
+        stripped = (s or "").strip()
+        return bool(inline_oscola_pat.search(stripped) or harvard_pat.search(stripped))
+
+    for sent in sentence_candidates:
+        s = (sent or "").strip()
+        if not _looks_argumentative(s):
+            continue
+        if _has_inline_support(s):
+            continue
+        missing.append(re.sub(r"\s+", " ", s)[:120])
+
+    if not missing:
+        return []
+
+    preview = "; ".join(missing[:3])
+    return [
+        "Argumentative sentence-support verification failed: "
+        f"{len(missing)} argumentative sentence(s) lack immediate inline authority support. "
+        f"Examples: {preview}"
+    ]
+
+
 def _strict_complete_answer_issues(
     answer_text: str,
     prompt_text: str,
@@ -274,6 +731,8 @@ def _strict_complete_answer_issues(
         )
     )
     issues.extend(_history_aware_structure_issues(answer_text, prompt_text, messages or []))
+    issues.extend(_direct_complete_answer_structure_issues(answer_text, prompt_text, messages or []))
+    issues.extend(_complete_answer_sentence_support_issues(answer_text))
 
     word_window = _resolve_complete_answer_word_window(
         prompt_text,
@@ -310,6 +769,45 @@ def _strict_complete_answer_issues(
     return deduped
 
 
+def _direct_complete_answer_structure_issues(
+    answer_text: str,
+    prompt_text: str,
+    messages: List[Dict[str, Any]],
+) -> List[str]:
+    """
+    Apply a direct-answer scaffold check when the response is a fresh backend
+    complete answer rather than a website-style continuation with anchored
+    history state.
+    """
+    if _is_continuation_command(prompt_text or ""):
+        return []
+
+    state = _expected_unit_structure_state_from_history(prompt_text, messages or [])
+    if state:
+        return []
+
+    if _is_problem_flow(prompt_text, messages or []):
+        unit_kind = "problem"
+    elif _is_essay_flow(prompt_text, messages or []) or _is_long_form_analysis_flow(prompt_text, messages or []):
+        unit_kind = "essay"
+    else:
+        return []
+
+    violates, reason = detect_unit_structure_policy_violation(
+        answer_text,
+        unit_kind=unit_kind,
+        require_question_heading=False,
+        expected_question_number=None,
+        is_same_topic_continuation=False,
+        expected_part_number=1,
+        starts_new_question=True,
+        enforce_single_top_level_part=False,
+    )
+    if violates and reason:
+        return [f"Direct complete-answer structure violation: {reason}."]
+    return []
+
+
 def _build_complete_answer_rewrite_prompt(
     *,
     user_message: str,
@@ -330,8 +828,10 @@ def _build_complete_answer_rewrite_prompt(
             "",
             "[BACKEND STRICT COMPLETE-ANSWER REWRITE]",
             _backend_answer_output_instruction(output_mode),
+            "Chat/API delivery does NOT relax the required Part-numbered answer scaffold.",
             "Regenerate the full answer from the beginning as one complete backend answer.",
             "Use indexed RAG and the shared backend code-guide instructions already active for this request.",
+            "Ensure every argumentative sentence is individually supported by an immediate inline authority citation, or rewrite it more cautiously so it does not overstate support.",
             "Mirror every explicit question limb and prompt-map ask distinctly.",
             "Delete irrelevant, repetitive, or drifted material instead of padding around it.",
             "Keep the answer structurally final: no website split markers, no continuation markers, no partial-draft language.",
@@ -353,6 +853,8 @@ def send_complete_answer_with_docs(
     model_name: Optional[str] = None,
     enforce_long_response_split: Optional[bool] = None,
     output_mode: Optional[str] = None,
+    artifact_path: Optional[str] = None,
+    cleanup_paths: Optional[List[Any]] = None,
     strict_complete_answer_verification: bool = True,
 ) -> Tuple[Any, Optional[str]]:
     """
@@ -365,8 +867,44 @@ def send_complete_answer_with_docs(
     - complete-answer outputs get one deterministic backend verification/retry.
     """
     enforce_split = bool(enforce_long_response_split) if enforce_long_response_split is not None else False
-    resolved_output_mode = resolve_backend_answer_output_mode(message, output_mode=output_mode)
+    delivery_mode = resolve_backend_answer_delivery_mode(message, output_mode=output_mode)
+    resolved_output_mode = delivery_mode
     history = history or []
+    notes_request_active = bool(
+        callable(detect_topic_notes_request)
+        and detect_topic_notes_request(message or "").get("is_topic_notes")
+    )
+
+    if notes_request_active and callable(register_topic_notes_cleanup_paths) and cleanup_paths:
+        register_topic_notes_cleanup_paths(project_id, cleanup_paths)
+
+    if stream and delivery_mode in {
+        BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
+        BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT,
+    }:
+        raise ValueError("Streaming is not supported when creating markdown or DOCX answer artifacts.")
+
+    def _finalize_complete_answer_return(
+        final_text: str,
+        final_meta: Any,
+        final_rag_context: Optional[str],
+    ) -> Tuple[Any, Optional[str]]:
+        artifact_info = write_complete_answer_artifact(
+            final_text,
+            delivery_mode=delivery_mode,
+            prompt_text=message,
+            project_id=project_id,
+            artifact_path=artifact_path,
+        )
+        protected_cleanup_paths: List[Any] = []
+        if artifact_info and artifact_info.get("path"):
+            protected_cleanup_paths.append(artifact_info["path"])
+        _cleanup_complete_answer_one_off_artifacts(
+            cleanup_paths,
+            protected_paths=protected_cleanup_paths,
+        )
+        final_meta = _attach_complete_answer_artifact_meta(final_meta, artifact_info)
+        return (final_text, final_meta), final_rag_context
 
     response, rag_context = _provider_send_message_with_docs(
         api_key,
@@ -392,14 +930,14 @@ def send_complete_answer_with_docs(
         response_text = response or ""
 
     if not strict_complete_answer_verification:
-        return (response_text, response_meta), rag_context
+        return _finalize_complete_answer_return(response_text, response_meta, rag_context)
 
     if not _looks_like_backend_complete_answer_request(message, documents):
-        return (response_text, response_meta), rag_context
+        return _finalize_complete_answer_return(response_text, response_meta, rag_context)
 
     low_message = (message or "").lower()
     if "[backend strict complete-answer rewrite]" in low_message:
-        return (response_text, response_meta), rag_context
+        return _finalize_complete_answer_return(response_text, response_meta, rag_context)
 
     issues = _strict_complete_answer_issues(
         response_text,
@@ -408,7 +946,7 @@ def send_complete_answer_with_docs(
         enforce_long_response_split=enforce_split,
     )
     if not issues:
-        return (response_text, response_meta), rag_context
+        return _finalize_complete_answer_return(response_text, response_meta, rag_context)
 
     retry_text = response_text
     retry_meta = response_meta
@@ -461,7 +999,7 @@ def send_complete_answer_with_docs(
 
     if word_window:
         best_text = _truncate_to_word_cap(best_text, int(word_window[1]), int(word_window[0]))
-    return (best_text, best_meta), rag_context
+    return _finalize_complete_answer_return(best_text, best_meta, rag_context)
 
 
 def send_message_with_docs(
@@ -475,6 +1013,8 @@ def send_message_with_docs(
     model_name: Optional[str] = None,
     enforce_long_response_split: Optional[bool] = None,
     output_mode: Optional[str] = None,
+    artifact_path: Optional[str] = None,
+    cleanup_paths: Optional[List[Any]] = None,
     strict_complete_answer_verification: bool = True,
 ) -> Tuple[Any, Optional[str]]:
     """
@@ -491,6 +1031,98 @@ def send_message_with_docs(
         model_name=model_name,
         enforce_long_response_split=enforce_long_response_split,
         output_mode=output_mode,
+        artifact_path=artifact_path,
+        cleanup_paths=cleanup_paths,
+        strict_complete_answer_verification=strict_complete_answer_verification,
+    )
+
+
+def send_complete_answer_with_output(
+    api_key: str,
+    message: str,
+    documents: List[Dict],
+    project_id: str,
+    history: List[Dict] = None,
+    stream: bool = False,
+    provider: str = "auto",
+    model_name: Optional[str] = None,
+    enforce_long_response_split: Optional[bool] = None,
+    output_mode: Optional[str] = None,
+    artifact_path: Optional[str] = None,
+    cleanup_paths: Optional[List[Any]] = None,
+    strict_complete_answer_verification: bool = True,
+) -> Tuple[Any, Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Canonical delivery wrapper for backend complete answers.
+
+    No matter whether the caller wants chat text, direct markdown-compatible
+    text, a saved `.md`, or a Desktop `.docx`, generation still runs through
+    `send_complete_answer_with_docs(...)` first so backend answer shaping, guide
+    injection, and mandatory RAG stay identical.
+    """
+    delivery_mode = resolve_backend_answer_delivery_mode(message, output_mode=output_mode)
+    response, rag_context = send_complete_answer_with_docs(
+        api_key=api_key,
+        message=message,
+        documents=documents,
+        project_id=project_id,
+        history=history,
+        stream=stream,
+        provider=provider,
+        model_name=model_name,
+        enforce_long_response_split=enforce_long_response_split,
+        output_mode=delivery_mode,
+        artifact_path=artifact_path,
+        cleanup_paths=cleanup_paths,
+        strict_complete_answer_verification=strict_complete_answer_verification,
+    )
+
+    if stream:
+        return response, rag_context, None
+
+    response_text = ""
+    response_meta: Any = []
+    if isinstance(response, tuple) and len(response) >= 1:
+        response_text = response[0] or ""
+        response_meta = response[1] if len(response) >= 2 else []
+    else:
+        response_text = response or ""
+
+    artifact_info = _extract_complete_answer_artifact_meta(response_meta)
+    return (response_text, response_meta), rag_context, artifact_info
+
+
+def send_message_with_output(
+    api_key: str,
+    message: str,
+    documents: List[Dict],
+    project_id: str,
+    history: List[Dict] = None,
+    stream: bool = False,
+    provider: str = "auto",
+    model_name: Optional[str] = None,
+    enforce_long_response_split: Optional[bool] = None,
+    output_mode: Optional[str] = None,
+    artifact_path: Optional[str] = None,
+    cleanup_paths: Optional[List[Any]] = None,
+    strict_complete_answer_verification: bool = True,
+) -> Tuple[Any, Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Backwards-compatible alias to the canonical backend delivery wrapper.
+    """
+    return send_complete_answer_with_output(
+        api_key=api_key,
+        message=message,
+        documents=documents,
+        project_id=project_id,
+        history=history,
+        stream=stream,
+        provider=provider,
+        model_name=model_name,
+        enforce_long_response_split=enforce_long_response_split,
+        output_mode=output_mode,
+        artifact_path=artifact_path,
+        cleanup_paths=cleanup_paths,
         strict_complete_answer_verification=strict_complete_answer_verification,
     )
 

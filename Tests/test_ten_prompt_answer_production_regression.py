@@ -3,7 +3,7 @@ Regression checks for ten representative prompt shapes that should now route to
 topic-specific answer-production guidance rather than generic or wrong-topic paths.
 """
 
-from gemini_service import _infer_retrieval_profile, _subissue_queries_for_unit
+from model_applicable_service import _infer_retrieval_profile, _subissue_queries_for_unit
 
 
 CASES = [

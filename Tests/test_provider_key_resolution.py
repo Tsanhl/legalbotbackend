@@ -1,6 +1,6 @@
 import os
 
-from gemini_service import get_env_api_key_for_provider, is_placeholder_api_key, resolve_provider_api_key
+from model_applicable_service import get_env_api_key_for_provider, is_placeholder_api_key, resolve_provider_api_key
 
 
 assert is_placeholder_api_key("your_gemini_api_key_here") is True

@@ -794,7 +794,7 @@ def _build_structured_amend_prompt(
 - this amend workflow is copy-first and non-destructive: the backend applies changes only to a new amended output copy.
 - implemented amendment markup is yellow highlight only. Do not request bold markup, plain unmarked output, or any other styling change.
 - preserve the user's original local DOCX styling everywhere else: font, size, spacing, alignment, paragraph style, footnote system, and local emphasis pattern remain unchanged unless a targeted correction is required by the active citation style.
-- final amend delivery is one canonical amended DOCX saved directly in Desktop root. Do not create a version ladder unless the user expressly asks for multiple versions.
+- final amend delivery is one protected amended DOCX saved directly in Desktop root. Use the canonical Desktop filename first, then allocate the next versioned sibling if a prior final amended output already exists.
 """.strip()
 
     if _uses_inline_oscola_house_style(active_citation_style):
@@ -836,7 +836,7 @@ def _build_structured_amend_prompt(
 Task: produce an amendment plan for the uploaded DOCX so the final amended document reaches a genuine 90+ / 10/10 standard.
 
 Mandatory quality standard:
-- follow the backend legal guidance in `gemini_service.py` together with `LEGAL_DOC_GUIDE.md` as the controlling instruction set for this amend plan.
+- follow the backend legal guidance in `model_applicable_service.py` together with `LEGAL_DOC_GUIDE.md` as the controlling instruction set for this amend plan.
 - same substantive standard as the legal review workflow: grammar, fluency, coherence, structure, benchmark fit, authority precision, citation accuracy, and final polish.
 - this amend mode should behave like the local legal-review amend workflow: do the full lawyer-grade review internally first, then return direct implemented wording/footnote text rather than a review report.
 - run the equivalent of the full review stack internally before deciding amendments: grammar -> fluency/coherence -> accuracy/authority/citation verification -> final holistic polish.
@@ -1197,7 +1197,7 @@ def run_uploaded_legal_doc_amend_workflow(
             temp_dir=temp_artifacts_dir,
             citation_style=citation_style,
         )
-        output_path = DESKTOP_ROOT / f"{Path(_doc_name(doc) or 'uploaded').stem}_amended_marked_final.docx"
+        output_path, _ = _normalize_to_final_output_path(temp_source, None)
         try:
             changed_items, _review_context = apply_amendments(
                 source=temp_source,

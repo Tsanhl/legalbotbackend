@@ -8,7 +8,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from gemini_service import (
+from model_applicable_service import (
     _build_legal_doc_workflow_prompt_block,
     _build_uploaded_material_query_context,
     _collect_uploaded_materials,
@@ -135,10 +135,10 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         "Please amend this based on comments and keep my style.",
         snapshot,
     )
-    assert "follow the backend legal guidance in `gemini_service.py` together with `LEGAL_DOC_GUIDE.md`" in amend_prompt
+    assert "follow the backend legal guidance in `model_applicable_service.py` together with `LEGAL_DOC_GUIDE.md`" in amend_prompt
     assert "the user's original DOCX is read-only. Never overwrite the original source file path." in amend_prompt
     assert "implemented amendment markup is yellow highlight only." in amend_prompt
-    assert "final amend delivery is one canonical amended DOCX saved directly in Desktop root." in amend_prompt
+    assert "final amend delivery is one protected amended DOCX saved directly in Desktop root." in amend_prompt
     assert "amend quality target is a genuine 90+ / 10/10 standard" in amend_prompt
     assert "apply marker-feedback discipline on structure and clarity" in amend_prompt
     assert "do not mention excluded limbs or irrelevant scope limits unless they genuinely orient the answer" in amend_prompt

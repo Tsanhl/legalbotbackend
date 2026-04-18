@@ -1,4 +1,4 @@
-from gemini_service import (
+from model_applicable_service import (
     _build_local_code_rag_answer_prompt_block,
     get_dynamic_chunk_count,
     _resolve_long_response_info,

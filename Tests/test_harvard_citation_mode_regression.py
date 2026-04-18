@@ -4,7 +4,7 @@ Regression checks for explicit Harvard citation-mode support.
 
 from pathlib import Path
 
-import gemini_service as gemini
+import model_applicable_service as gemini
 import legal_doc_tools.workflow as workflow
 
 

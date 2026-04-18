@@ -4,7 +4,7 @@ Single-run regression matrix for the main legal subject areas and split/chunk ro
 This is a local planner/routing test only. It does NOT call the live Gemini API.
 """
 
-from gemini_service import (
+from model_applicable_service import (
     QUERY_CHUNK_CONFIG,
     _extract_split_units,
     _chunk_count_for_query_type,

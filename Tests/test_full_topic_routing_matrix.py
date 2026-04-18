@@ -1,5 +1,5 @@
 """
-Full routing regression matrix for every specific topic in gemini_service.py.
+Full routing regression matrix for every specific topic in model_applicable_service.py.
 
 This is a planner/routing/fan-out sanity test only. It does not call live LLM APIs.
 """
@@ -7,7 +7,7 @@ This is a planner/routing/fan-out sanity test only. It does not call live LLM AP
 import re
 from pathlib import Path
 
-from gemini_service import _infer_retrieval_profile, _subissue_queries_for_unit
+from model_applicable_service import _infer_retrieval_profile, _subissue_queries_for_unit
 
 
 def essay(title: str, body: str) -> str:
@@ -851,6 +851,174 @@ ROUTING_CASES = [
             "Discuss jurisprudence, Hart, Fuller, legal positivism, natural law, the separation thesis, the internal morality of law, the rule of recognition, and the grudge informer debate.",
         ),
     },
+    {
+        "topic": "civil_procedure_justice_balance",
+        "kind": "essay",
+        "prompt": essay(
+            "Civil Procedure – Justice and Efficiency",
+            "Critically evaluate whether the Civil Procedure Rules strike an appropriate balance between efficiency and access to justice, considering the overriding objective, case management, disclosure, costs and cost control, sanctions for non-compliance, ADR, and Part 36 settlement pressure.",
+        ),
+    },
+    {
+        "topic": "consumer_credit_unfair_relationship",
+        "kind": "problem",
+        "prompt": problem(
+            "Consumer Credit – Unfair Relationship",
+            "Mrs Patel signs a solar panel and home battery credit agreement after a home visit. The lender said it used fully vetted installers, but the work was defective, there were irregularities in execution, and she now relies on section 140A and linked lender liability to resist enforcement and recover compensation.",
+        ),
+    },
+    {
+        "topic": "contract_unfairness_controls",
+        "kind": "essay",
+        "prompt": essay(
+            "Contract Law – Controls on Unfairness",
+            "Critically evaluate whether modern contract law adopts a coherent approach to the control of unfairness through consideration, promissory estoppel, misrepresentation, duress, undue influence, and related indirect controls rather than any general doctrine of unfairness.",
+        ),
+    },
+    {
+        "topic": "criminal_participation_inchoate_liability",
+        "kind": "essay",
+        "prompt": essay(
+            "Criminal Law – Participation and Inchoate Liability",
+            "Critically evaluate whether the modern law of complicity, joint enterprise after Jogee, accessory liability, attempt, conspiracy, and other forms of inchoate liability draws a coherent line between intentional participation and anticipatory criminalisation.",
+        ),
+    },
+    {
+        "topic": "education_school_exclusion_send",
+        "kind": "problem",
+        "prompt": problem(
+            "Education Law – Exclusion and SEND",
+            "A secondary school permanently excludes Tariq shortly before exams. He has ADHD and special educational needs, the governing body upheld the exclusion, key evidence was disclosed late, and his parents argue procedural fairness breaches, SEND Code of Practice failures, equality-law issues, and a public law challenge.",
+        ),
+    },
+    {
+        "topic": "election_law_campaign_finance",
+        "kind": "problem",
+        "prompt": problem(
+            "Election Law – Campaign Finance",
+            "Advise on a local election campaign involving targeted online advertisements, an official spending return, a donation from an overseas source, possible unlawful spending, and whether the losing candidate can challenge the result by election petition despite evidential difficulties.",
+        ),
+    },
+    {
+        "topic": "employment_whistleblowing_unfair_dismissal",
+        "kind": "problem",
+        "prompt": problem(
+            "Employment Law – Whistleblowing and Dismissal",
+            "A worker raises protected disclosure concerns about understaffing, unpaid overtime, and manipulated working-time records. The employer later dismisses her for loss of trust and disruptive conduct. Advise on worker or employee status, whistleblowing, unfair dismissal, causation, remedies, and whether retaliation is the real reason for dismissal.",
+        ),
+    },
+    {
+        "topic": "equality_substantive_framework",
+        "kind": "essay",
+        "prompt": essay(
+            "Equality Law – Substantive Equality",
+            "Critically evaluate whether the Equality Act framework moves beyond formal equal treatment toward substantive equality, with reference to direct discrimination, indirect discrimination, justification, structural disadvantage, positive action, protected characteristics, and the public sector equality duty under section 149.",
+        ),
+    },
+    {
+        "topic": "equity_trust_creation_tracing",
+        "kind": "problem",
+        "prompt": problem(
+            "Equity and Trusts – Creation and Tracing",
+            "Aisha transfers money to Karim to hold for the family until she decides what should be done with it. Karim mixes funds, buys shares, pays down a mortgage, and becomes insolvent. Advise on certainty of intention, certainty of subject matter, certainty of objects, breach of trust, tracing in equity, mixed funds, the mortgage and shares, and remedies against Karim.",
+        ),
+    },
+    {
+        "topic": "family_financial_provision_divorce",
+        "kind": "essay",
+        "prompt": essay(
+            "Family Law – Financial Provision on Divorce",
+            "Critically evaluate whether financial provision on divorce under the Matrimonial Causes Act 1973 strikes an acceptable balance between flexibility and certainty, with reference to section 25, needs, sharing, compensation, non-matrimonial property, judicial discretion, clean break, and whether reform is needed.",
+        ),
+    },
+    {
+        "topic": "generic_planning_law",
+        "kind": "problem",
+        "prompt": problem(
+            "Planning Law – Judicial Review of Permission",
+            "Residents challenge a planning permission granted in a conservation area. Advise on the statutory planning framework, the development plan, section 70(2) material considerations, consultation fairness, late publication of a key report, irrationality, and the realistic judicial review remedy.",
+        ),
+    },
+    {
+        "topic": "jurisprudence_legal_certainty_justice",
+        "kind": "essay",
+        "prompt": essay(
+            "Jurisprudence – Certainty and Justice",
+            "Critically evaluate whether legal certainty should prevail over substantive justice, discussing predictability, the rule of law, hard cases, judicial discretion, positivist and anti-positivist views, and whether legitimacy depends more on certainty or justice.",
+        ),
+    },
+    {
+        "topic": "land_registered_overriding_interests",
+        "kind": "essay",
+        "prompt": essay(
+            "Land Law – Registered Land and Informal Rights",
+            "Critically evaluate whether the system of registered land in England and Wales strikes an appropriate balance between certainty of title and the protection of informal rights, considering the goals of registration, the mirror principle, curtain principle, insurance principle, overriding interests, actual occupation, and certainty for purchasers.",
+        ),
+    },
+    {
+        "topic": "patent_validity_infringement_ownership",
+        "kind": "problem",
+        "prompt": problem(
+            "Patent Law – Validity, Infringement, and Ownership",
+            "Advise on a patent dispute over a portable diagnostic device. A rival argues the patent is invalid because of a medical conference presentation and similar research, a former employee claims to be the true inventor and owner of the invention, and the rival says its redesigned product does not infringe.",
+        ),
+    },
+    {
+        "topic": "pensions_scheme_change_misrepresentation",
+        "kind": "problem",
+        "prompt": problem(
+            "Pensions Law – Scheme Change and Misrepresentation",
+            "Members of a final salary pension scheme were told that moving to a defined contribution arrangement would make no real difference. Advise on accrued pension rights, section 67 Pensions Act 1995, misleading statements, misrepresentation, trustees and employers, consultation obligations, financial loss, and remedies.",
+        ),
+    },
+    {
+        "topic": "prison_law_state_treatment_review",
+        "kind": "essay",
+        "prompt": essay(
+            "Prison Law – State Treatment and Review",
+            "Critically evaluate whether prisoners in England and Wales retain meaningful legal protection against prison administration, considering prison conditions, segregation, parole-related decisions, judicial review, procedural fairness, Article 3, Article 8, arbitrariness, proportionality, and judicial deference.",
+        ),
+    },
+    {
+        "topic": "product_liability_consumer_protection",
+        "kind": "essay",
+        "prompt": essay(
+            "Product Liability – Consumer Protection",
+            "Critically evaluate whether product liability law adequately protects consumers, considering negligence, strict liability under the Consumer Protection Act 1987, proof of defect, causation, manufacturers, importers, retailers, complex supply chains, and software-enabled or AI-assisted products.",
+        ),
+    },
+    {
+        "topic": "public_law_fettering_expression_assembly",
+        "kind": "problem",
+        "prompt": problem(
+            "Public Law – Fettering, Expression, and Assembly",
+            "A council adopts a Community Integrity Programme with responsible messaging standards aimed at destabilising content, refuses an organiser access to the council hall and consultation forums, and relies on undisclosed profiling material. Advise on fettering of discretion, Article 10, Article 11, venue access, consultation, public participation, and judicial review remedies.",
+        ),
+    },
+    {
+        "topic": "public_procurement_award_challenges",
+        "kind": "essay",
+        "prompt": essay(
+            "Public Procurement – Award Challenges",
+            "Critically evaluate whether public procurement law strikes the right balance between transparency, equal treatment, competition, and practical flexibility in public contracting, with reference to the Procurement Act 2023, award decisions, unsuccessful bidder challenges, and remedies.",
+        ),
+    },
+    {
+        "topic": "secured_transactions_priority",
+        "kind": "essay",
+        "prompt": essay(
+            "Secured Transactions – Priority",
+            "Critically evaluate whether the law governing fixed charges, floating charges, retention of title clauses, registration and transparency, priority disputes, insolvency distribution, lenders, and unsecured creditors is commercially workable and coherent.",
+        ),
+    },
+    {
+        "topic": "succession_wills_validity",
+        "kind": "problem",
+        "prompt": problem(
+            "Succession – Wills and Validity",
+            "Advise on probate and the validity of a later will made shortly before death after extensive involvement by a live-in carer. Consider the Wills Act 1837, testamentary capacity, Banks v Goodfellow, knowledge and approval, suspicious circumstances, Barry v Butlin, undue influence, whether an earlier will revives, and which will is likely to govern the estate.",
+        ),
+    },
 ]
 
 
@@ -904,7 +1072,7 @@ BANNED_GENERIC_SUBQUERY_LABELS = {
 
 
 def _routed_topics_from_service_source() -> set[str]:
-    text = Path("gemini_service.py").read_text()
+    text = Path("model_applicable_service.py").read_text()
     return set(re.findall(r'topic\s*=\s*"([^"]+)"', text)) - EXCLUDED_TOPICS
 
 

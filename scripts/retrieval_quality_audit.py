@@ -20,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from gemini_service import (  # type: ignore
+from model_applicable_service import (  # type: ignore
     _infer_retrieval_profile,
     _rag_quality_audit,
     get_retrieved_content,

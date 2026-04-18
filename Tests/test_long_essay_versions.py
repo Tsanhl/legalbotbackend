@@ -2,7 +2,7 @@
 Test script for the updated long essay detection with Version 1 and Version 2
 """
 
-from gemini_service import detect_long_essay
+from model_applicable_service import detect_long_essay
 
 print("=" * 80)
 print("TESTING LONG ESSAY DETECTION - VERSION 1 VS VERSION 2")

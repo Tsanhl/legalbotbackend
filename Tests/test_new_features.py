@@ -4,8 +4,8 @@ Test script for the two new features:
 2. should_use_google_search_grounding
 """
 
-# Import the functions from gemini_service
-from gemini_service import (
+# Import the functions from the canonical backend service module
+from model_applicable_service import (
     detect_specific_para_improvement,
     should_use_google_search_grounding,
     extract_word_targets_from_prompt,

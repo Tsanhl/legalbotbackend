@@ -8,7 +8,7 @@ These assertions verify:
 4. the subquery planner asks the right deeper questions for retrieval.
 """
 
-from gemini_service import (
+from model_applicable_service import (
     _backend_request_requires_mandatory_rag,
     _build_legal_answer_quality_gate,
     _infer_retrieval_profile,

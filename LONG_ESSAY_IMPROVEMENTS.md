@@ -121,7 +121,7 @@ if long_essay_info["await_user_choice"]:
 
 ## 📁 Files Modified
 
-### 1. `gemini_service.py`
+### 1. `model_applicable_service.py`
 **Function**: `detect_long_essay(message: str) -> dict`
 
 **New Fields Added**:

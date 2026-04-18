@@ -2,7 +2,7 @@
 Test the intelligent part division system
 """
 
-from gemini_service import (
+from model_applicable_service import (
     detect_long_essay,
     _resolve_long_response_info,
     _finalize_model_output_text,
@@ -10,7 +10,7 @@ from gemini_service import (
     detect_unit_structure_policy_violation,
     get_dynamic_chunk_count,
 )
-from gemini_service import LONG_RESPONSE_PART_WORD_CAP
+from model_applicable_service import LONG_RESPONSE_PART_WORD_CAP
 
 print("=" * 80)
 print("INTELLIGENT PART DIVISION SYSTEM - TEST")
@@ -133,7 +133,7 @@ assert cleaned.count("(End of Answer)") == 1
 assert cleaned.endswith("(End of Answer)")
 assert "\nA.\n" not in f"\n{cleaned}\n"
 
-with open("gemini_service.py", "r", encoding="utf-8") as fh:
+with open("model_applicable_service.py", "r", encoding="utf-8") as fh:
     gemini_src = fh.read()
 assert 'Each NEW MAJOR issue cluster expressly asked by the question MUST start under its OWN Part-numbered subtitle' in gemini_src
 

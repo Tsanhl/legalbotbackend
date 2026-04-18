@@ -2,7 +2,7 @@
 Regression checks for long-response word-count planning consistency.
 """
 
-from gemini_service import (
+from model_applicable_service import (
     LONG_RESPONSE_PART_WORD_CAP,
     _compute_equal_part_targets,
     _extract_split_units,
@@ -131,7 +131,7 @@ Ahmed, Beth and Chris dispute ownership and sale of a home. Advise them.
     assert [int(d.get("question_index", 0) or 0) for d in plain_deliverables] == [1, 2, 3]
 
     # Static contradiction check in current runtime source
-    with open("gemini_service.py", "r", encoding="utf-8") as fh:
+    with open("model_applicable_service.py", "r", encoding="utf-8") as fh:
         src = fh.read()
     assert "Do not intentionally exceed {words_per_part + 100} words." not in src
 

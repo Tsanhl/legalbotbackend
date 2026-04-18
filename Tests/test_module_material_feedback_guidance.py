@@ -12,10 +12,10 @@ retrieval profile that is used at runtime.
 
 from pathlib import Path
 
-from gemini_service import _infer_retrieval_profile
+from model_applicable_service import _infer_retrieval_profile
 
 
-source = Path("gemini_service.py").read_text().lower()
+source = Path("model_applicable_service.py").read_text().lower()
 
 
 # Private international law

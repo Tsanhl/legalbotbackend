@@ -2,7 +2,7 @@
 Regression checks for sharper legal-answer guidance and hearsay-specific precision.
 """
 
-from gemini_service import (
+from model_applicable_service import (
     _build_legal_answer_quality_gate,
     _infer_retrieval_profile,
     _subissue_queries_for_unit,
@@ -55,7 +55,7 @@ def run() -> None:
     ]:
         assert line in quality_gate, line
 
-    with open("gemini_service.py", "r", encoding="utf-8") as fh:
+    with open("model_applicable_service.py", "r", encoding="utf-8") as fh:
         src = fh.read()
     assert "do NOT append a bibliography, source list, web links, or 'primary sources checked' section" in src
     assert "stronger hearsay essays explain that the 2003 Act mixes necessity" in src

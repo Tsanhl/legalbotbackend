@@ -20,7 +20,7 @@ WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 
 guide_text = (ROOT / "legal_doc_tools" / "LEGAL_DOC_GUIDE.md").read_text(encoding="utf-8")
-gemini_text = (ROOT / "gemini_service.py").read_text(encoding="utf-8")
+gemini_text = (ROOT / "model_applicable_service.py").read_text(encoding="utf-8")
 
 assert "Do not auto-italicise `Table of Cases` entries" in guide_text
 assert "For EU cases, use `para` / `paras` after a comma for pinpoint paragraph references" in guide_text

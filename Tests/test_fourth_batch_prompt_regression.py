@@ -2,7 +2,7 @@
 Regression checks for the 50-question broad legal prompt batch.
 """
 
-from gemini_service import _infer_retrieval_profile, _subissue_queries_for_unit
+from model_applicable_service import _infer_retrieval_profile, _subissue_queries_for_unit
 
 
 CASES = [

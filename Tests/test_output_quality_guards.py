@@ -31,7 +31,7 @@ from backend_answer_runtime import (
     AUTO_INTERMEDIATE_UNDERLENGTH_FIX_MAX_ATTEMPTS,
     ENABLE_RAG_DEBUG_UI,
 )
-from gemini_service import (
+from model_applicable_service import (
     sanitize_output_against_allowlist,
     _infer_retrieval_profile,
     _plan_deliverables_by_units,
@@ -67,7 +67,7 @@ def run() -> None:
     assert "the principal remedy or response available, and any practical limit on relief that follows from the analysis above." in backend_src
     assert "the most likely liability outcome" in backend_src
 
-    with open("gemini_service.py", "r", encoding="utf-8") as fh:
+    with open("model_applicable_service.py", "r", encoding="utf-8") as fh:
         gemini_src = fh.read()
     assert "should_enforce_continuation_repeat_guard = (\n        (not FAST_GENERATION_MODE)" not in gemini_src
     assert "should_enforce_unit_structure_policy = (\n        (not FAST_GENERATION_MODE)" not in gemini_src

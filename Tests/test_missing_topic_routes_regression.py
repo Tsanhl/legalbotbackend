@@ -8,7 +8,7 @@ These assertions verify:
 4. the subquery planner stays specific to the subject instead of drifting into generic fallback analysis.
 """
 
-from gemini_service import (
+from model_applicable_service import (
     _backend_request_requires_mandatory_rag,
     _infer_retrieval_profile,
     _subissue_queries_for_unit,

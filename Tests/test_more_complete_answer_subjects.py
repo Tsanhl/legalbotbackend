@@ -7,7 +7,7 @@ These assertions verify:
 3. the legal answer quality gate contains the subject-specific writing guide.
 """
 
-from gemini_service import (
+from model_applicable_service import (
     _backend_request_requires_mandatory_rag,
     _build_legal_answer_quality_gate,
     _build_local_code_rag_answer_prompt_block,

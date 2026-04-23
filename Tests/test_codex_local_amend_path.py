@@ -7,6 +7,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+import legal_doc_tools.amend_large_docx_sections as amend_large
+import legal_doc_tools.refine_docx_from_amended as refine
 from legal_doc_tools.amend_large_docx_sections import main
 from legal_doc_tools.refine_docx_from_amended import (
     _count_yellow_highlight_runs_in_root,
@@ -45,57 +47,73 @@ def _write_minimal_docx(path: Path) -> None:
 
 with tempfile.TemporaryDirectory() as tmp_dir:
     root = Path(tmp_dir)
+    desktop = root / "Desktop"
+    desktop.mkdir()
     source_path = root / "sample_large.docx"
     plans_dir = root / "plans"
-    output_path = root / "sample_large_amended.docx"
+    requested_output_path = root / "sample_large_amended.docx"
+    expected_output_path = desktop / "sample_large_amended_marked_final.docx"
     _write_minimal_docx(source_path)
 
-    assert main(
-        [
-            str(source_path),
-            "--export-plan-dir",
-            str(plans_dir),
-            "--sections",
-            "abstract",
-            "--rag-chunks",
-            "0",
+    original_tool_desktop = amend_large.DESKTOP_ROOT
+    original_refine_desktop = refine.DESKTOP_ROOT
+    amend_large.DESKTOP_ROOT = desktop
+    refine.DESKTOP_ROOT = desktop
+
+    try:
+        assert main(
+            [
+                str(source_path),
+                "--export-plan-dir",
+                str(plans_dir),
+                "--sections",
+                "abstract",
+                "--rag-chunks",
+                "0",
+            ]
+        ) == 0
+
+        plan_path = plans_dir / "abstract.plan.json"
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        assert plan["_meta"]["mode"] == "codex_direct_amend"
+        assert plan["_meta"]["section_name"] == "abstract"
+        editable_indexes = [
+            paragraph["index"]
+            for paragraph in plan["paragraphs"]
+            if paragraph["index"] not in set(plan["_meta"]["frozen_paragraph_indexes"])
         ]
-    ) == 0
+        assert editable_indexes == [1]
+        for paragraph in plan["paragraphs"]:
+            if paragraph["index"] == 1:
+                paragraph["text"] = (
+                    "This draft argues that United States privacy law needs structural reform."
+                )
+                break
+        plan["summary"] = "Codex local plan regression test."
+        plan_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    plan_path = plans_dir / "abstract.plan.json"
-    plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    assert plan["_meta"]["mode"] == "codex_direct_amend"
-    assert plan["_meta"]["section_name"] == "abstract"
-    editable_indexes = [
-        paragraph["index"]
-        for paragraph in plan["paragraphs"]
-        if paragraph["index"] not in set(plan["_meta"]["frozen_paragraph_indexes"])
-    ]
-    assert editable_indexes == [1]
-    for paragraph in plan["paragraphs"]:
-        if paragraph["index"] == 1:
-            paragraph["text"] = (
-                "This draft argues that United States privacy law needs structural reform."
-            )
-            break
-    plan["summary"] = "Codex local plan regression test."
-    plan_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+        assert main(
+            [
+                str(source_path),
+                "--plan-dir",
+                str(plans_dir),
+                "--sections",
+                "abstract",
+                "--output",
+                str(requested_output_path),
+            ]
+        ) == 0
 
-    assert main(
-        [
-            str(source_path),
-            "--plan-dir",
-            str(plans_dir),
-            "--sections",
-            "abstract",
-            "--output",
-            str(output_path),
-        ]
-    ) == 0
+        assert source_path.exists()
+        assert not requested_output_path.exists()
+        assert expected_output_path.exists()
 
-    amended_root = _load_docx_xml(output_path, "word/document.xml")
-    amended_texts = [_paragraph_text_all_runs(p) for p in _iter_body_paragraphs(amended_root)]
-    assert amended_texts[1] == "This draft argues that United States privacy law needs structural reform."
-    assert _count_yellow_highlight_runs_in_root(amended_root) > 0
+        amended_root = _load_docx_xml(expected_output_path, "word/document.xml")
+        amended_texts = [_paragraph_text_all_runs(p) for p in _iter_body_paragraphs(amended_root)]
+        assert amended_texts[1] == "This draft argues that United States privacy law needs structural reform."
+        assert _count_yellow_highlight_runs_in_root(amended_root) > 0
+    finally:
+        amend_large.DESKTOP_ROOT = original_tool_desktop
+        refine.DESKTOP_ROOT = original_refine_desktop
 
 print("Codex local amend path regression passed.")

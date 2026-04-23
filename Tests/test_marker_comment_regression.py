@@ -169,6 +169,11 @@ def test_shared_marker_comment_drafting_rules_present():
         "When using a sequence of cases or statutory changes, explain the progression",
         "Do not rely on unexplained shorthand",
         "If the answer depends on a central tension, asymmetry, or contrast, surface that frame early",
+        "If a sentence could prompt 'Compared with what?', 'From what?', 'Harmed how?', 'With what effect?'",
+        "Quantify or calibrate comparative and superlative claims",
+        "Do not create thin sections or standalone headings for one short point",
+        "AI-discrimination focus: if you rely on empirical bias or error-rate disparities",
+        "[TOPIC-SPECIFIC GUIDANCE — AI / TECH GOVERNANCE (REGULATION / LIABILITY / PRIVACY)]",
     ]:
         assert phrase in SOURCE, f"Missing shared drafting rule: {phrase}"
 

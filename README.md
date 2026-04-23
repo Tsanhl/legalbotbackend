@@ -5,7 +5,7 @@ This repository is now backend-only. The Streamlit/UI layer and old frontend ass
 1. `backend_answer_runtime.send_complete_answer_with_docs(...)`
    Canonical backend complete-answer entrypoint. Uses direct/backend mode by default, keeps legal RAG + code-guide routing active, applies the stricter complete-answer verification layer, and now honours chat / `.md` / `.docx` delivery requests without switching generation pipelines.
 2. `backend_answer_runtime.send_complete_answer_with_output(...)`
-   Canonical delivery wrapper. It always generates through `send_complete_answer_with_docs(...)` first, then optionally saves that same verified answer as a project `.md` artifact or a Desktop `.docx` artifact. It can also clean registered one-off helper artifacts after a successful complete-answer run.
+   Canonical delivery wrapper. It always generates through `send_complete_answer_with_docs(...)` first, then optionally saves that same verified answer as a project `.md` artifact or a Desktop `.docx` artifact. It can also clean registered temporary task-specific helper artifacts after a successful complete-answer run.
 3. `legal_doc_tools.workflow.run_auto_legal_doc_amend_workflow(...)`
    Runs the automatic DOCX amend workflow for uploaded or local documents.
 

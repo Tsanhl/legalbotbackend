@@ -245,11 +245,11 @@ try:
         try:
             md_path = Path(tmpdir) / "northbridge_answer.md"
             docx_path = Path(tmpdir) / "northbridge_answer.docx"
-            answer_one_off_file = Path(tmpdir) / "specific_question_one_off_prompt.txt"
-            answer_one_off_dir = Path(tmpdir) / "one_off_answer_helper_dir"
-            answer_one_off_file.write_text("temporary prompt helper", encoding="utf-8")
-            answer_one_off_dir.mkdir()
-            (answer_one_off_dir / "draft.json").write_text("{}", encoding="utf-8")
+            answer_task_artifact_file = Path(tmpdir) / "task_specific_prompt.txt"
+            answer_task_artifact_dir = Path(tmpdir) / "task_specific_answer_helper_dir"
+            answer_task_artifact_file.write_text("temporary prompt helper", encoding="utf-8")
+            answer_task_artifact_dir.mkdir()
+            (answer_task_artifact_dir / "draft.json").write_text("{}", encoding="utf-8")
             runtime.BACKEND_ANSWER_ARTIFACT_DESKTOP_ROOT = Path(tmpdir)
             os.chdir(tmpdir)
 
@@ -299,7 +299,7 @@ try:
                 stream=False,
                 output_mode="markdown_file",
                 artifact_path=str(md_path),
-                cleanup_paths=[str(answer_one_off_file), str(answer_one_off_dir)],
+                cleanup_paths=[str(answer_task_artifact_file), str(answer_task_artifact_dir)],
             )
             assert md_response == artifact_response[0]
             assert "artifact-meta" in md_meta
@@ -308,8 +308,8 @@ try:
             assert md_artifact["mode"] == runtime.BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT
             assert Path(md_artifact["path"]) == md_path.resolve()
             assert md_path.read_text(encoding="utf-8").strip() == artifact_response[0].strip()
-            assert not answer_one_off_file.exists()
-            assert not answer_one_off_dir.exists()
+            assert not answer_task_artifact_file.exists()
+            assert not answer_task_artifact_dir.exists()
             assert set(Path(tmpdir).glob("*_backend_answer.md")) == existing_default_md_artifacts
 
             (docx_response, docx_meta), docx_rag_context, docx_artifact = runtime.send_complete_answer_with_output(

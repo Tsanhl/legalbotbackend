@@ -492,19 +492,100 @@ ALLOW_GOOGLE_FALLBACK_FOR_CONTINUATIONS = (
 # Store chat sessions by project ID
 chat_sessions: Dict[str, Any] = {}
 topic_notes_session_state: Dict[str, Dict[str, Any]] = {}
+legal_doc_amend_session_state: Dict[str, Dict[str, Any]] = {}
+complete_answer_session_state: Dict[str, Dict[str, Any]] = {}
 genai_client: Any = None  # Client for new library
 current_api_key: Optional[str] = None
 knowledge_base_loaded = False
 knowledge_base_summary = ''
-TOPIC_NOTES_ONE_OFF_HINTS: Tuple[str, ...] = (
+TOPIC_NOTES_TEMP_ARTIFACT_HINTS: Tuple[str, ...] = (
     "topic_notes",
     "notes_sample",
     "note_sample",
+    "task_specific",
+    "task-specific",
+    "temporary",
     "revision_notes",
     "principles_notes",
     "notes_temp",
     "notes_draft",
     "notes_helper",
+)
+LEGAL_DOC_AMEND_TEMP_ARTIFACT_HINTS: Tuple[str, ...] = (
+    "legal_doc",
+    "doc_specific",
+    "doc-specific",
+    "task_specific",
+    "task-specific",
+    "temporary",
+    "one_off",
+    "one-off",
+    "verification_ledger",
+    "authority_verification",
+    "sentence_support",
+    "question_guidance",
+    "comment_coverage",
+    "amend_config",
+    "amend_prompt",
+)
+COMPLETE_ANSWER_TEMP_ARTIFACT_HINTS: Tuple[str, ...] = (
+    "complete_answer",
+    "task_specific",
+    "task-specific",
+    "temporary",
+    "transient",
+    "tmp",
+    "temp",
+    "scratch",
+    "draft",
+    "helper",
+    "context_dump",
+    "prompt_dump",
+    "question_pack",
+    "answer_helper",
+    "answer_prompt",
+)
+COMPLETE_ANSWER_TEMP_ARTIFACT_SUFFIXES: Tuple[str, ...] = (
+    ".txt",
+    ".md",
+    ".json",
+    ".docx",
+    ".csv",
+    ".log",
+    ".tmp",
+    ".prompt",
+)
+LEGAL_DOC_FOLLOW_UP_TERMS: Tuple[str, ...] = (
+    "docx",
+    ".docx",
+    "document",
+    "draft",
+    "essay",
+    "paper",
+    "abstract",
+    "table of content",
+    "table of contents",
+    "contents",
+    "abbreviation",
+    "abbreviations",
+    "bibliography",
+    "references",
+    "reference list",
+    "footnote",
+    "footnotes",
+    "citation",
+    "citations",
+    "comment",
+    "comments",
+    "style",
+    "font",
+    "spacing",
+    "bold",
+    "italic",
+    "headings",
+    "heading",
+    "section",
+    "sections",
 )
 
 # Dynamic chunk configuration for query types.
@@ -3147,6 +3228,11 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "premium app", "fitness app", "software update", "ai coaching package",
         "meal-planning subscription", "meal planning subscription",
         "locks her out after an update", "never appear", "subscription locks",
+    ]) and not any(k in ql for k in [
+        "product liability", "consumer protection act 1987", "defective product",
+        "strict product liability", "personal injury", "property damage", "installer",
+        "installation error", "supplier", "household battery", "fire", "overheats",
+        "manufacturer says the real cause", "manufacturer says the real cause was",
     ]):
         topic = "consumer_digital_content"
     elif any(k in ql for k in [
@@ -3216,6 +3302,8 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             "lawyer", "lawyers", "solicitor", "solicitors", "barrister", "barristers",
             "legal ethics", "professional ethics", "sra principles", "sra code",
             "company law", "companies act 2006", "director", "directors",
+            "public procurement", "procurement law", "contracting authority", "evaluator",
+            "evaluation", "award criteria", "abnormally low", "unsuccessful bidder",
         ]
     ):
         topic = "equity_fiduciary_duties"
@@ -3314,11 +3402,12 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
     ):
         topic = "tort_duty_of_care_framework"
     elif any(k in ql for k in [
-        "separate legal personality", "limited liability", "salomon", "salomon v salomon",
+        "separate legal personality", "company personality", "limited liability", "salomon", "salomon v salomon",
         "corporate veil", "veil lifting", "lifting the veil", "piercing the veil",
         "prest v petrodel", "prest", "petrodel", "adams v cape", "adams v cape industries",
         "gilford motor", "jones v lipman", "facade", "façade", "sham company",
         "evasion principle", "concealment principle", "group enterprise", "single economic unit",
+        "parent company liability", "parent-company liability", "group structures", "group structure",
     ]):
         topic = "company_personality_veil_lifting"
     elif any(k in ql for k in [
@@ -3799,16 +3888,20 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
     elif (
         any(k in ql for k in [
             "legal ethics", "professional responsibility", "professional ethics",
+            "legal services", "professional regulation",
             "lawyers' duties", "lawyers duties", "solicitors' duties", "solicitor's duties",
             "barristers' duties", "conflicts of interest", "conflict of interest",
             "sra principles", "sra code", "duty to the court",
+            "administration of justice", "undertaking", "undertakings",
             "legal professional privilege", "former client conflict", "former-client conflict",
             "acting against a former client", "acting against former client",
+            "former-client confidential information", "former client confidential information",
             "information barrier", "information barriers", "bolkiah",
         ])
         and any(k in ql for k in [
             "conflict", "conflicts", "ethics", "professional",
             "confidentiality", "privilege", "court", "lawyer", "solicitor", "barrister",
+            "undertaking", "undertakings", "regulation", "administration of justice",
         ])
     ):
         topic = "legal_ethics_conflicts"
@@ -3863,6 +3956,10 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "digital content", "faulty app", "faulty software", "downloaded content",
         "streaming service", "digital game", "in-app purchase", "downloadable content",
         "consumer rights act digital", "cra 2015 digital",
+    ]) and not any(k in ql for k in [
+        "product liability", "consumer protection act 1987", "defective product",
+        "strict product liability", "personal injury", "property damage", "installer",
+        "installation error", "supplier", "household battery", "fire", "overheats",
     ]):
         topic = "consumer_digital_content"
     elif (
@@ -4606,8 +4703,10 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
     elif any(k in ql for k in [
         "arbitration", "party autonomy", "lex arbitri", "new york convention",
         "uncitral", "model law", "seat of arbitration", "kompetenz", "kompetenz-kompetenz",
-        "separability", "arbitration act 1996", "section 30", "section 67", "section 68",
-        "section 69", "fiona trust", "enka v chubb", "arbitral award",
+        "separability", "arbitration act 1996", "arbitration act 2025",
+        "section 30", "section 67", "section 68", "section 69", "section 70",
+        "fiona trust", "enka v chubb", "halliburton", "duty of disclosure",
+        "summary disposal", "arbitral award",
     ]) and not any(k in ql for k in [
         "private international law", "conflict of laws", "choice of law",
         "forum conveniens", "parallel proceedings", "cross-border private disputes",
@@ -5962,14 +6061,17 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         ],
         "international_commercial_arbitration": [
             "Arbitration Act 1996",
+            "Arbitration Act 2025",
             "New York Convention",
             "UNCITRAL Model Law",
             "section 30",
             "section 67",
+            "section 70",
             "section 68",
             "section 69",
             "Fiona Trust",
             "Enka v Chubb",
+            "Halliburton",
         ],
         "private_international_law_post_brexit": [
             "Hague Choice of Court Agreements Convention 2005",
@@ -6840,9 +6942,11 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             "repair covenant", "user covenant", "alterations without consent",
         ],
         "international_commercial_arbitration": [
-            "arbitration act 1996", "new york convention", "uncitral", "model law",
+            "arbitration act 1996", "arbitration act 2025", "new york convention", "uncitral", "model law",
             "party autonomy", "seat", "lex arbitri", "separability", "kompetenz",
-            "section 30", "section 67", "section 68", "section 69", "fiona trust", "enka",
+            "section 30", "section 67", "section 68", "section 69", "section 70",
+            "fiona trust", "enka", "halliburton", "duty of disclosure",
+            "summary disposal", "law governing the arbitration agreement",
         ],
         "private_international_law_post_brexit": [
             "private international law", "conflict of laws", "post-brexit", "post brexit",
@@ -7952,9 +8056,9 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         },
         "company_personality_veil_lifting": {
             "issue_bank": [
-                "explain Salomon briefly, then move quickly to the alleged exception or alternative doctrine",
+                "explain Salomon briefly, then separate the baseline of personality and limited liability from veil piercing and parent-company liability",
                 "classify the route as statute, agency/facade, evasion, or non-veil alternative doctrine",
-                "distinguish parent-company negligence from veil piercing",
+                "distinguish parent-company negligence and other direct-duty routes from true veil piercing",
                 "evaluate whether the current law balances certainty and accountability",
             ],
             "must_avoid": [
@@ -8099,8 +8203,8 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "public_procurement_award_challenges": {
             "issue_bank": [
                 "separate the procurement objectives and transparency/equal-treatment constraints from the authority's operational flexibility",
-                "keep award discretion, challenge route, and remedies distinct",
-                "state whether the complaint is about the design of the competition, the evaluation decision, or post-award challenge timing",
+                "keep award-criteria changes, evaluator conflicts, abnormally low tenders, challenge route, and remedies distinct",
+                "state whether the complaint is about the design of the competition, the evaluation decision, conflict management, abnormally low tender review, or post-award challenge timing",
                 "end with whether the regime is a practical safeguard or an overly formal compliance framework",
             ],
             "must_avoid": [
@@ -8147,13 +8251,15 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "product_liability_consumer_protection": {
             "issue_bank": [
                 "separate negligence, strict liability under the 1987 Act, proof of defect, causation, and defendant categories",
-                "keep product-defect proof distinct from the later question who in the supply chain is a proper defendant",
-                "state expressly whether modern technology creates a doctrinal gap or mainly an evidential/application problem",
+                "classify the claimants' losses clearly: personal injury, property damage, and any consequential loss flowing from the physical damage",
+                "keep product-defect proof distinct from the later question who in the supply chain is a proper defendant and whether installer, supplier, or update failure changes causation",
+                "state expressly whether modern technology creates a doctrinal gap or mainly an evidential/application problem, especially where software updates are blamed",
                 "end with whether the present framework remains adequate for software-enabled and AI-assisted products",
             ],
             "must_avoid": [
                 "do not collapse negligence and CPA strict liability into one generic consumer-protection paragraph",
                 "do not assume that software complexity itself changes the legal test unless you explain where the fit problem actually arises",
+                "do not treat installer error or user failure to install an update as automatically breaking causation without analysing whether the product was already defective or materially unsafe",
             ],
             "marker_criticism": [
                 "product-liability essays improve when they compare negligence and statutory strict liability directly and then explain where defect proof, causation, and modern supply chains still leave consumers exposed",
@@ -9678,6 +9784,8 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
                 "separate proof problems from substantive discrimination tests",
                 "for problem questions, separate equality-act discrimination, public-law fairness, article 22 or human-review, and reasons/remedy issues rather than treating them as one undifferentiated AI complaint",
                 "state the regulatory or remedial response realistically",
+                "quantify the comparator and magnitude of any disparate outcome rather than leaving the disparity at slogan level",
+                "explain the practical harm mechanism, for example ranking, denial, pricing, scrutiny, exclusion, or surveillance",
             ],
             "must_avoid": [
                 "do not let policy critique replace Equality Act or data-protection analysis",
@@ -9685,6 +9793,7 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             ],
             "marker_criticism": [
                 "algorithmic-discrimination answers improve when they show exactly how opacity, proxies, and proof burdens interact with the doctrinal route chosen",
+                "stronger answers define any distinctive literature term on first use, calibrate empirical claims, and explain the concrete effect of the system on the affected group rather than speaking in abstract harm labels",
             ],
         },
         "tax_avoidance_gaar": {
@@ -10072,12 +10181,15 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
                 "separate jurisdictional challenge routes from merits review and enforcement",
                 "distinguish tribunal power, court support, and court supervision instead of treating arbitration autonomy as self-contained",
                 "state whether the practical fight concerns jurisdiction, anti-suit relief, set-aside, or enforcement resistance and organise the answer around that pressure point",
+                "for current English-law answers, update the analysis for the Arbitration Act 2025 reforms rather than defaulting to an older pre-2025 section 67 framework",
             ],
             "must_avoid": [
                 "do not merge separability, competence-competence, and curial review into one generic pro-arbitration discussion",
+                "do not describe every section 67 challenge as if English law still assumes a full rehearing after the 2025 reforms",
             ],
             "marker_criticism": [
                 "arbitration answers improve when they distinguish the law of the seat, the arbitration agreement, and the award-challenge route precisely",
+                "higher-mark arbitration answers now flag the section 70 filter, the codified disclosure duty, and the post-2025 section 67 position instead of stopping at pre-reform authorities alone",
             ],
             "counterargument_focus": [
                 "whether the modern pro-arbitration stance protects party autonomy and efficiency or risks under-scrutinising jurisdictional and fairness objections",
@@ -11337,18 +11449,25 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
     ):
         base_must_cover = _dedupe_keep_order([
             "Arbitration Act 1996",
+            "Arbitration Act 2025",
             "New York Convention",
             "section 66",
             "section 67",
             "section 68",
             "section 69",
+            "section 70",
+            "Halliburton",
+            "duty of disclosure",
+            "law governing the arbitration agreement",
+            "summary disposal",
             "public policy",
             "enforcement of arbitral awards",
         ] + authority_anchors[:10])
         base_expected = _dedupe_keep_order(base_expected + [
             "award enforcement", "court intervention", "section 66",
             "serious irregularity", "jurisdictional challenge", "public policy",
-            "finality", "mandatory limits",
+            "finality", "mandatory limits", "duty of disclosure",
+            "law governing the arbitration agreement", "summary disposal", "section 70 filter",
         ])
         source_type_hint_override = (
             "Arbitration Act/New York Convention text | enforcement/challenge authority | arbitration commentary"
@@ -11356,6 +11475,9 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         prompt_specific_source_mix = {"statutes": 2, "cases": 3, "secondary": 1}
         _add_prompt_guidance("issue_bank", [
             "separate simple enforcement of the award from challenge routes under sections 67, 68, and 69",
+            "for English-law award challenges, keep the section 70 filter and the post-2025 section 67 framework in view rather than defaulting to older full-rehearing language",
+            "for current English-law answers, note the 2025 reform cluster accurately: codified disclosure duty, statutory governing-law rule, summary disposal, and revised section 67, then prioritise the reforms that actually matter on these facts",
+            "allocate article V(1)(b), article V(1)(c), article V(1)(d), and article V(2)(b) precisely instead of blending all enforcement objections into generic public policy",
             "keep pro-arbitration finality distinct from the narrow mandatory grounds for court supervision",
             "end with the realistic enforcement path and whether resistance is likely to fail or succeed on these facts",
         ])
@@ -13365,6 +13487,30 @@ def _build_legal_answer_quality_gate(query: str, profile: Dict[str, Any]) -> str
         "63) Use the available word budget substantively. If important analysis, implications, counterarguments, or remedy detail remain available, do not leave major analytical headroom unused.",
         "64) Where the question asks you to advise named parties, interests, statements, or heads of claim, let the section order track that map so the route to the final answer is easy to follow.",
         "65) After any run of authorities, state the current legal position and the implication for these facts or for your thesis; do not leave the reader to infer the point of the case sequence.",
+        "66) If a sentence could prompt 'Compared with what?', 'From what?', 'Harmed how?', 'With what effect?', 'Protection from what?', 'Immunity from what?', or 'Which are what?', answer that explicitly in the same sentence or the next one.",
+        "67) Quantify or calibrate comparative and superlative claims. Do not write 'highest', 'most', 'uniquely', or similar absolutes unless the evidence really supports them.",
+        "68) If you name a harm, protection, immunity, or enforcement effect, explain the mechanism and the practical consequence rather than leaving the claim as a label.",
+        "69) If you use a distinctive label or term of art, define it on first use and say whether it is from the literature or your own analytic shorthand; cite the literature when borrowed.",
+        "70) Use measured register. Avoid bombastic adjectives such as 'catastrophic', 'devastating', or 'seismic' unless the facts or authority genuinely justify that level of rhetoric.",
+        "71) Define acronyms and specialist shorthands on first use. Do not assume the reader will decode terms such as MQD, CPR, CRA, or similar labels without a first-use explanation.",
+        "72) When summarising an earlier section, chapter, or source, do not claim it proved more than it actually established. Match the summary to the true scope of the underlying material.",
+        "73) If a comparative or economic claim depends on scale, burden, investment, or market impact, give the relevant comparator figures where available or narrow the claim to what the evidence actually shows.",
+        "74) When introducing an authority, say briefly why it matters on these facts or to this argument; do not assume the case name or statutory label explains itself.",
+        "75) If your own reform proposal appears open to the same cost, complexity, or burden objection you level against the current law, address that parity objection expressly rather than leaving the tension unanswered.",
+        "76) Do not create thin sections or standalone headings for one short point with no distinct analytical job. Merge overlapping material and let the stronger section absorb the point.",
+        "77) In longer essays or chaptered answers, if a later section introduces future developments or emerging technology, tie it back explicitly to the main thesis and the earlier doctrinal or regulatory gaps.",
+        "78) Keep thesis consistency tight. Do not attack a feature as if it were a defect when it actually supports your stated thesis unless you explain the narrower trade-off or hidden cost.",
+        "79) When comparing jurisdictions or regulatory models, do not stop at doctrinal description; state the concrete legal, institutional, or commercial consequence of the difference.",
+        "80) When reviewer/user feedback identifies a drafting flaw, convert it into a reusable drafting rule and sweep the whole answer for the same problem, not only the flagged sentence.",
+        "81) Carry forward only the abstract lesson from prior feedback. Do not retain or repeat document-specific confidential facts, names, quotations, or authority lists unless the present question independently requires them.",
+        "82) If feedback suggests vagueness, replace shorthand with explicit doctrine, comparator, mechanism, actor, and consequence rather than generic labels.",
+        "83) Answer from the current prompt and the current retrieved authorities only. Do not rely on task-specific hardcoding, bespoke case lists, or leftover source packs from an earlier run.",
+        "84) Before concluding, run a final prompt-map sweep and ensure every express limb, counterargument, remedy, enforcement point, and evaluative ask from the question has been answered somewhere clearly.",
+        "85) Remove vague referents. Do not leave 'this', 'it', 'they', 'those', or similar pronouns standing in for an unclear doctrine, actor, instrument, or consequence when precision is possible.",
+        "86) Use the available word budget on the hardest issues. Add depth to decisive counterarguments, remedies, proof problems, and practical consequences before adding more background summary.",
+        "87) Where a recent statute, commencement, or appellate reform materially changes the law, answer from the current post-reform position rather than repeating the superseded pre-reform framework.",
+        "88) Distinguish between points that are merely arguable, points that are realistically dangerous, and points that are mostly forensic noise. Do not flatten all objections to the same weight.",
+        "89) When invoking a recent reform package, identify which reform actually changes the analysis on these facts and which reforms are only background context; do not dump the whole package without triage.",
     ]
 
     if mode == "problem":
@@ -13384,6 +13530,8 @@ def _build_legal_answer_quality_gate(query: str, profile: Dict[str, Any]) -> str
         general_lines.append("Problem format: defendant or respondent counterarguments must be evaluated, not merely listed. Say whether each one is genuinely strong, moderate, or weak on these facts.")
         general_lines.append("Problem format: if several statements, interests, assets, or claimant positions require separate treatment, give them visibly separate analytical treatment instead of folding them into one generic discussion.")
         general_lines.append("Problem format: if a decisive fact is missing, flag the assumption and show briefly how the answer changes if the fact cuts the other way.")
+        general_lines.append("Problem format: where the question raises forum/jurisdiction, governing law, merits, remedies, or enforcement, keep those routes analytically separate unless the law truly merges them.")
+        general_lines.append("Problem format: before the final conclusion, sweep the question wording and make sure every express limb is answered distinctly rather than left for the examiner to infer from general discussion.")
     elif mode == "essay":
         general_lines.append("Essay format: clear thesis in introduction, balanced critique in body, and justified position in conclusion; choose the body themes from the actual question rather than a fixed topic template.")
         general_lines.append("Essay format: Part I should be brief and functional: issue, thesis, and structure only, not extended scene-setting or background narrative.")
@@ -13406,6 +13554,7 @@ def _build_legal_answer_quality_gate(query: str, profile: Dict[str, Any]) -> str
         general_lines.append("Essay format: where retrieved material allows, integrate named academic disagreement or deeper constitutional/jurisprudential theory to sharpen the critique.")
         general_lines.append("Essay format: if doctrine is doing policy work, say so openly rather than masking the policy choice in neutral doctrinal language.")
         general_lines.append("Essay format: after discussing a case line or doctrinal sequence, say expressly what the law now is and why that matters for the thesis; do not leave the section as a case catalogue.")
+        general_lines.append("Essay format: before finishing, check the exact asks in the question and make sure each evaluative limb has received explicit analysis rather than being absorbed into a general conclusion.")
     else:
         general_lines.append("Mixed format: keep essay and problem sections separate; do not blend standards of analysis.")
 
@@ -13767,6 +13916,11 @@ def _build_legal_answer_quality_gate(query: str, profile: Dict[str, Any]) -> str
                 "AI-discrimination focus: anchor the doctrinal core in at least one concrete legal regime such as Equality Act 2010 (ss 13, 19, 136) and, where relevant, data-protection or risk-based AI regulation.",
                 "AI-discrimination focus: make the proof problem explicit: ordinary discrimination law assumes claimants can access enough facts to raise an inference, but opacity and trade-secret barriers undermine that assumption.",
                 "AI-discrimination focus: keep the privacy/fairness paradox short and sharp; explain why fairness auditing needs sensitive data and why 'fairness through unawareness' is inadequate.",
+                "AI-discrimination focus: if you rely on empirical bias or error-rate disparities, state the comparator and the size or direction of the disparity rather than saying only that one group is 'most affected' or 'especially vulnerable'.",
+                "AI-discrimination focus: if you say the system harms a group, specify whether the harm comes through ranking, denial, pricing, eligibility screening, surveillance, or another concrete mechanism.",
+                "AI-discrimination focus: define and attribute distinctive literature labels on first use rather than dropping terms such as digital colonialism or privacy nihilism as slogans.",
+                "AI-discrimination focus: if you compare US, EU, and UK responses, explain the concrete compliance, litigation, or enforcement consequence of the doctrinal difference rather than stopping at taxonomy.",
+                "AI-discrimination focus: if a later section turns to a newer pressure point or emerging technology, explain why it matters for the essay's main thesis instead of leaving it as a detached future-looking add-on.",
                 "AI-discrimination focus: conclude decisively on whether existing frameworks are necessary but insufficient, and what AI-specific tools are justified.",
             ])
     elif topic == "land_leasehold_covenants":
@@ -15082,6 +15236,22 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
             ),
         ]
 
+    if detected_topic == "public_procurement_award_challenges" and is_problem:
+        return [
+            (
+                "Transparency, altered criteria, and equal-treatment discipline",
+                f"{txt}\n\nFOCUS: identify the governing procurement framework first, then separate complaints about late changes to scoring criteria or evaluation methodology from broader complaints about commercial judgment. Explain why transparency and equal treatment matter to any change in evaluative approach."
+            ),
+            (
+                "Conflicts of interest, abnormally low tenders, and evaluative scrutiny",
+                f"{txt}\n\nFOCUS: keep evaluator conflict-management distinct from the abnormally low tender issue. Analyse what had to be disclosed or managed, when the authority had to investigate a low bid, and how far the court will second-guess technical evaluation."
+            ),
+            (
+                "Challenge route, remedies, and likely court approach",
+                f"{txt}\n\nFOCUS: finish with the practical challenge route, standstill or post-contract position, and the remedies most realistically available. Distinguish a true statutory breach from mere disagreement with evaluative judgment."
+            ),
+        ]
+
     if detected_topic == "pensions_scheme_change_misrepresentation" and is_problem:
         return [
             (
@@ -15111,6 +15281,22 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
             (
                 "Software-enabled products, AI, and overall adequacy",
                 f"{txt}\n\nFOCUS: conclude by testing whether current doctrine remains adequate for software-enabled and AI-assisted products, or whether complexity and opacity expose deeper weaknesses in the framework."
+            ),
+        ]
+
+    if detected_topic == "product_liability_consumer_protection" and is_problem:
+        return [
+            (
+                "Negligence, CPA defect, and claimant loss categories",
+                f"{txt}\n\nFOCUS: identify the claimants and classify the losses first: personal injury, property damage, and any consequential loss flowing from the fire. Then separate negligence from strict liability under the Consumer Protection Act 1987."
+            ),
+            (
+                "Defect, causation, installer error, and software-update arguments",
+                f"{txt}\n\nFOCUS: analyse whether the battery unit was defective before turning to the manufacturer's installer-error and user-update arguments. Explain whether those points negate defect, break causation, or instead create concurrent responsibility."
+            ),
+            (
+                "Manufacturer, installer, supplier, and practical remedies",
+                f"{txt}\n\nFOCUS: keep the position of manufacturer, installer, and any supplier distinct, then conclude with the most realistic claims and remedies for each affected consumer."
             ),
         ]
 
@@ -16212,15 +16398,15 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
         return [
             (
                 "Award enforceability and the main enforcement route",
-                f"{txt}\n\nFOCUS: identify the route to enforcement first, including the New York Convention and any domestic mechanism such as section 66. Separate routine enforcement from challenge or resistance."
+                f"{txt}\n\nFOCUS: identify the route to enforcement first, including the New York Convention and any domestic mechanism such as section 66. Separate routine enforcement from challenge or resistance, and allocate article V(1)(b), article V(1)(c), article V(1)(d), and article V(2)(b) to the correct objections rather than treating them as interchangeable."
             ),
             (
                 "Court intervention, challenge, and supervisory limits",
-                f"{txt}\n\nFOCUS: analyse what courts may still do through jurisdictional review, serious-irregularity challenge, or limited appeal. Keep sections 67, 68, and 69 distinct and explain how narrowly they operate."
+                f"{txt}\n\nFOCUS: analyse what courts may still do through jurisdictional review, serious-irregularity challenge, or limited appeal. Keep sections 67, 68, and 69 distinct, add the section 70 filter and time limit, and update section 67 to the post-2025 position rather than describing it in older automatic full-rehearing terms."
             ),
             (
                 "Limits of arbitration and likely practical outcome",
-                f"{txt}\n\nFOCUS: explain the mandatory limits of party autonomy, including public policy and non-arbitrability where relevant, then end with the most realistic outcome for compliance or enforcement."
+                f"{txt}\n\nFOCUS: explain the mandatory limits of party autonomy, including public policy and non-arbitrability where relevant. Treat public policy as the policy of the enforcing state, not an abstract free-standing category, and end with the most realistic sequencing: seat challenge first, enforcement moves quickly elsewhere, and security if adjournment is granted."
             ),
         ]
 
@@ -18404,11 +18590,11 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
         return [
             (
                 "Party autonomy, seat, and lex arbitri",
-                f"{txt}\n\nFOCUS: explain party autonomy through the seat and governing arbitral law, and say why autonomy always operates within a mandatory legal framework."
+                f"{txt}\n\nFOCUS: explain party autonomy through the seat and governing arbitral law, and say why autonomy always operates within a mandatory legal framework. For current English-law analysis, note the post-2025 statutory rule on the law governing the arbitration agreement instead of relying only on pre-reform Enka framing."
             ),
             (
                 "Kompetenz-Kompetenz, separability, and court supervision",
-                f"{txt}\n\nFOCUS: analyse separability, Kompetenz-Kompetenz, and the role of court review under sections 67, 68, and 69 without treating them as conceptually identical."
+                f"{txt}\n\nFOCUS: analyse separability, Kompetenz-Kompetenz, and the role of court review under sections 67, 68, and 69 without treating them as conceptually identical. If the answer turns to English supervisory review, keep the section 70 filter and the post-2025 section 67 framework in view."
             ),
             (
                 "Enforcement and evaluative conclusion",
@@ -22086,6 +22272,243 @@ def detect_topic_notes_request(message: str) -> dict:
     return result
 
 
+def _extract_requested_mcq_count(message: str) -> Optional[int]:
+    raw = str(message or "")
+    if not raw.strip():
+        return None
+    patterns = [
+        r"(?i)\b(\d{1,3})\s*(?:mcq|mcqs|multiple[- ]choice questions?|single best answer questions?|sba questions?|questions?)\b",
+        r"(?i)\b(?:generate|create|draft|write|give|make|prepare|produce|set)\s+(\d{1,3})\s*(?:mcq|mcqs|multiple[- ]choice questions?|single best answer questions?|sba questions?|questions?)\b",
+        r"(?i)\b(\d{1,3})\b(?=[^\n]{0,80}\b(?:mcq|mcqs|multiple[- ]choice questions?|single best answer questions?|sba questions?|questions?)\b)",
+        r"(?i)\b(?:generate|create|draft|write|give|make|prepare|produce|set)\s+(\d{1,3})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if match:
+            try:
+                value = int(match.group(1))
+            except Exception:
+                value = 0
+            if 1 <= value <= 250:
+                return value
+    return None
+
+
+def detect_mcq_workflow_request(message: str) -> Dict[str, Any]:
+    """
+    Detect MCQ/SQE single-best-answer workflows that need a dedicated structure
+    instead of essay/problem-answer scaffolds.
+
+    Returns:
+        dict with:
+        - 'active': bool
+        - 'mode': None | 'correction' | 'generation'
+        - 'question_count': Optional[int]
+        - 'sqe_requested': bool
+        - 'no_repeat_requested': bool
+        - 'response_detail': 'questions_only' | 'answer_key' | 'full_explanations'
+    """
+    raw = str(message or "")
+    msg_lower = raw.lower()
+    result: Dict[str, Any] = {
+        "active": False,
+        "mode": None,
+        "question_count": None,
+        "sqe_requested": ("sqe" in msg_lower) or ("flk" in msg_lower),
+        "no_repeat_requested": False,
+        "response_detail": "questions_only",
+    }
+    if not msg_lower.strip():
+        return result
+
+    question_heading_count = len(re.findall(r"(?im)^\s*question\s+\d+\b", raw))
+    option_line_count = len(re.findall(r"(?im)^\s*[A-E]\.\s+", raw))
+    has_question_stem = (
+        question_heading_count >= 1
+        and option_line_count >= 4
+        and "which statement best reflects" in msg_lower
+    )
+    has_answer_markers = any(
+        token in msg_lower for token in [
+            "my answer:",
+            "correct answer:",
+            "result:",
+            "my current answers",
+            "current answers",
+            "corrected overall result",
+        ]
+    ) or bool(re.search(r"(?i)\b[A-E](?:\s+[A-E]){4,}\b", raw))
+
+    correction_patterns = [
+        "correct this set",
+        "correct the set",
+        "correct set",
+        "correct me set",
+        "correct my answers",
+        "check my answers",
+        "mark my answers",
+        "which answers are wrong",
+        "which are wrong",
+        "correct a certain set of questions",
+        "corrected answer set",
+        "corrected overall result",
+    ]
+    generation_patterns = [
+        " mcq",
+        "mcqs",
+        "multiple choice",
+        "multiple-choice",
+        "single best answer",
+        "single-best-answer",
+        "sba ",
+        "sbas",
+        "practice questions",
+        "practice question",
+        "quiz me",
+        "test me",
+        "testing mcq",
+    ]
+
+    result["no_repeat_requested"] = any(
+        token in msg_lower for token in [
+            "no repeated questions",
+            "no repeated question",
+            "no repeat",
+            "do not repeat",
+            "don't repeat",
+            "avoid repeating",
+            "new questions only",
+            "different from previous sets",
+            "not repeated with previous sets",
+            "not repeat previous set",
+            "not repeat previous sets",
+        ]
+    )
+
+    if any(token in msg_lower for token in ["with full explanations", "full explanations", "explain each answer", "why each answer"]):
+        result["response_detail"] = "full_explanations"
+    elif any(token in msg_lower for token in ["with answers", "answer key", "show answers", "include answers"]):
+        result["response_detail"] = "answer_key"
+
+    requested_count = _extract_requested_mcq_count(raw)
+    if requested_count:
+        result["question_count"] = requested_count
+
+    wants_correction = any(pattern in msg_lower for pattern in correction_patterns)
+    wants_generation = any(pattern in msg_lower for pattern in generation_patterns)
+    if has_question_stem and has_answer_markers:
+        wants_correction = True
+    if wants_correction:
+        result["active"] = True
+        result["mode"] = "correction"
+        result["response_detail"] = "full_explanations"
+        result["question_count"] = question_heading_count or result["question_count"]
+        return result
+
+    if wants_generation:
+        result["active"] = True
+        result["mode"] = "generation"
+        return result
+
+    return result
+
+
+def _build_mcq_workflow_prompt_block(
+    mcq_mode: Dict[str, Any],
+    *,
+    citation_style: str,
+) -> str:
+    if not mcq_mode.get("active"):
+        return ""
+    detail = str(mcq_mode.get("response_detail") or "questions_only")
+    count = mcq_mode.get("question_count")
+    count_line = (
+        f"- Generate exactly {int(count)} MCQ question(s)."
+        if isinstance(count, int) and count > 0
+        else "- Generate the exact number of MCQ questions the user requested."
+    )
+    no_repeat_line = (
+        "- Do not reuse or lightly reword questions, fact patterns, or tested propositions from prior sets visible in the chat history."
+        if mcq_mode.get("no_repeat_requested")
+        else "- Avoid trivial duplication within the same response. If prior sets are visible in the chat history, keep new questions meaningfully distinct."
+    )
+    sqe_line = (
+        "- Keep the questions tightly inside the requested SQE/FLK subject scope and exam style."
+        if mcq_mode.get("sqe_requested")
+        else "- Keep the questions tightly inside the legal topic scope the user asked for."
+    )
+
+    if mcq_mode.get("mode") == "correction":
+        return "\n".join([
+            "[MCQ QUESTION-SET CORRECTION MODE]",
+            "- This is a question-set correction workflow, not an essay, problem question, or revision-notes document.",
+            "- Do NOT use `Part I: Introduction`, Part headings, Title lines, essay roadmaps, bibliographies, or inline citations unless the user expressly asks for authorities.",
+            "- Start EXACTLY with these labels in this order, each on its own line:",
+            "  `Corrected overall result`",
+            "  `Correct: Q...`",
+            "  `Incorrect: Q...`",
+            "  `Defective question: ...`",
+            "- After that summary, start from Question 1 and continue in strict numerical order.",
+            "- For EACH question, use this exact scaffold:",
+            "  `Question N – [topic / subtopic / issue]`",
+            "  `Question`",
+            "  `[full question stem]`",
+            "  `[options A-E exactly once each]`",
+            "  `My answer: X`",
+            "  `Result: Correct` or `Result: Incorrect`",
+            "  `Correct answer: X`",
+            "  `Why A is wrong`",
+            "  `Why B is wrong`",
+            "  `Why C is wrong`",
+            "  `Why D is wrong`",
+            "  `Why E is wrong`",
+            "  `Why X is correct`",
+            "  `Knowledge point tested`",
+            "- Keep the option lettering and question numbering exactly aligned with the user's set.",
+            "- If a question is genuinely ambiguous or defective, list it under `Defective question` and explain briefly in that question block instead of pretending certainty.",
+            "- If the user supplied answers, preserve the user's chosen answer under `My answer:` and then mark it as correct or incorrect accurately.",
+            "- Use short, direct explanation paragraphs under each `Why ...` heading. No filler.",
+            "- Unless the user expressly asks otherwise, include the full corrected set rather than only the wrong questions.",
+            "- Accuracy override: every correction, answer key, and explanation must be supported by retrieved or otherwise verified legal material. If support is weak, mark the item as defective or qualify the uncertainty rather than guessing.",
+            "- Do NOT add legal citations by default in this correction format. Only add authorities if the user explicitly asks for them.",
+        ])
+
+    output_detail_line = {
+        "full_explanations": "- The user asked for answers/explanations, so after each question include `Answer: X` and a short explanation of why the answer is strongest.",
+        "answer_key": "- The user asked for answers, so after each question include `Answer: X` only, unless the user also asked for explanations.",
+        "questions_only": "- Default output for a test-only MCQ request is questions only. Do NOT reveal the answer unless the user expressly asked for answers or explanations.",
+    }.get(detail, "- Default output for a test-only MCQ request is questions only.")
+
+    return "\n".join([
+        "[MCQ GENERATION MODE]",
+        "- This is an MCQ/SQE question-generation workflow, not an essay, problem question, or revision-notes document.",
+        "- Do NOT use `Part I: Introduction`, Part headings, Title lines, bibliographies, or inline citations unless the user expressly asks for authorities.",
+        count_line,
+        sqe_line,
+        no_repeat_line,
+        "- Each question must be a genuine single-best-answer MCQ with one clearly strongest answer and options A-E.",
+        "- Do not recycle the same legal rule with cosmetic fact changes. Vary the doctrine, factual trap, and tested distinction where the user's scope allows it.",
+        "- Start directly with `Question 1 – [topic / subtopic / issue]`, then `Question`, then the stem, then options A-E.",
+        output_detail_line,
+        "- Accuracy override: every generated question and answer key must be supported by retrieved or otherwise verified legal material. If a proposition is not sufficiently verified, choose a safer question instead of guessing.",
+        f"- Citation style note: active style is {_citation_style_label(citation_style)} only if the user later asks for authorities. By default, MCQ output should stay clean and citation-free.",
+    ])
+
+
+def _build_mcq_workflow_override_block(mcq_mode: Dict[str, Any]) -> str:
+    if not mcq_mode.get("active"):
+        return ""
+    return "\n".join([
+        "[MCQ WORKFLOW OVERRIDE — HIGHEST PRIORITY]",
+        "- Ignore any earlier instruction that assumes an essay, problem answer, topic notes pack, Part-numbered long answer, or paragraph-improvement review.",
+        "- Do NOT output `Part I: Introduction`, `Part II`, `Conclusion`, `Final Conclusion`, `Title:`, `Question 1:` with a colon, or any essay/PQ scaffold unless the user expressly asks for a different MCQ format.",
+        "- In correction mode, start with the corrected-overall-result summary and then use the per-question correction scaffold only.",
+        "- In generation mode, start directly with numbered MCQ question blocks only.",
+        "- Do NOT add inline citations, bibliographies, authorities lists, or source labels unless the user expressly asks for them.",
+        "- If the user requests separators or lines between questions, use one simple horizontal separator line between question blocks and nothing more decorative.",
+    ])
+
+
 def _history_has_recent_topic_notes_request(
     history: Optional[List[Dict[str, Any]]],
     *,
@@ -22120,6 +22543,139 @@ def _is_topic_notes_amendment_message(message: str) -> bool:
         "section", "sections", "heading", "headings",
     )
     return any(term in low for term in amend_terms) and any(term in low for term in note_terms)
+
+
+def _looks_like_complete_answer_request_message(
+    message: str,
+    documents: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
+    low = (message or "").strip().lower()
+    if not low:
+        return False
+    if detect_topic_notes_request(message).get("is_topic_notes"):
+        return False
+    if _detect_legal_doc_workflow(message, documents or [], []).get("active"):
+        return False
+    if any(_uploaded_document_is_docx(doc) for doc in (documents or [])) and any(
+        term in low for term in LEGAL_DOC_ACTION_TERMS
+    ):
+        return False
+
+    answer_terms = (
+        "essay question",
+        "problem question",
+        "complete answer",
+        "full answer",
+        "write a complete answer",
+        "write a full answer",
+        "critically evaluate",
+        "advise the parties",
+        "in your answer",
+        "to what extent",
+        "discuss whether",
+    )
+    if any(term in low for term in answer_terms):
+        return True
+
+    has_word_target = bool(re.search(r"\b\d[\d,]{2,}\s*words?\b", low))
+    has_answer_shape = any(
+        term in low
+        for term in (
+            "essay",
+            "problem",
+            "question",
+            "answer",
+            "advise",
+            "critically",
+            "evaluate",
+            "discuss",
+        )
+    )
+    return has_word_target and has_answer_shape
+
+
+def _history_has_recent_complete_answer_request(
+    history: Optional[List[Dict[str, Any]]],
+    *,
+    max_user_turns: int = 10,
+) -> bool:
+    if not history:
+        return False
+    seen_user_turns = 0
+    for msg in reversed(history):
+        if msg.get("role") != "user":
+            continue
+        seen_user_turns += 1
+        raw_text = str(msg.get("text") or "").strip()
+        if raw_text and _looks_like_complete_answer_request_message(raw_text):
+            return True
+        if seen_user_turns >= max_user_turns:
+            break
+    return False
+
+
+def detect_complete_answer_session_signal(
+    message: str,
+    history: Optional[List[Dict[str, Any]]] = None,
+    *,
+    active: bool = False,
+    documents: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    low = (message or "").strip().lower()
+    complete_answer_request = bool(
+        low and _looks_like_complete_answer_request_message(message, documents)
+    )
+    recent_complete_answer_context = bool(
+        active or _history_has_recent_complete_answer_request(history)
+    )
+
+    acceptance_terms = (
+        "accept the answer",
+        "accept answer",
+        "accept the delivery",
+        "accept delivery",
+        "accept the result",
+        "accepted the answer",
+        "accepted the result",
+        "accepted the delivery",
+        "delivery accepted",
+        "result accepted",
+        "answer accepted",
+        "done with the answer",
+        "answer is done",
+        "essay is done",
+        "problem answer is done",
+        "looks good",
+        "all good",
+        "that works",
+        "this works",
+        "final now",
+        "finished now",
+    )
+    bare_accept_terms = {
+        "done",
+        "accepted",
+        "finished",
+        "all good",
+        "looks good",
+        "ok done",
+        "okay done",
+    }
+    has_accept_signal = any(term in low for term in acceptance_terms) or low in bare_accept_terms
+    is_acceptance = bool(
+        low
+        and recent_complete_answer_context
+        and (not complete_answer_request)
+        and has_accept_signal
+    )
+
+    return {
+        "is_acceptance": is_acceptance,
+        "acknowledgement": (
+            "Accepted. The complete-answer session and temporary answer artifacts have been cleared. "
+            "If you want another full answer, send the next question."
+        ),
+    }
 
 
 def detect_topic_notes_session_signal(
@@ -22174,7 +22730,7 @@ def detect_topic_notes_session_signal(
         "is_acceptance": is_acceptance,
         "is_amendment": is_amendment,
         "acknowledgement": (
-            "Accepted. The topic-notes session and one-off runtime notes artifacts have been cleared. "
+            "Accepted. The topic-notes session and temporary runtime notes artifacts have been cleared. "
             "If you want another notes pack, send the next law or topic."
         ),
     }
@@ -22200,12 +22756,239 @@ def register_topic_notes_cleanup_paths(project_id: str, paths: Optional[Iterable
     session["cleanup_paths"] = tracked
 
 
-def _topic_notes_path_has_one_off_hint(path: Path) -> bool:
+def register_complete_answer_cleanup_paths(project_id: str, paths: Optional[Iterable[Any]]) -> None:
+    if not project_id:
+        return
+    session = complete_answer_session_state.setdefault(
+        project_id,
+        {"active": True, "closed_after_acceptance": False, "cleanup_paths": []},
+    )
+    session["active"] = True
+    session["closed_after_acceptance"] = False
+    tracked: List[str] = list(session.get("cleanup_paths") or [])
+    seen = {str(path).strip() for path in tracked if str(path).strip()}
+    for raw in paths or []:
+        if raw is None:
+            continue
+        value = str(raw).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        tracked.append(value)
+    session["cleanup_paths"] = tracked
+
+
+def _history_has_recent_legal_doc_amend_request(
+    history: Optional[List[Dict[str, Any]]],
+    *,
+    max_user_turns: int = 10,
+) -> bool:
+    if not history:
+        return False
+    seen_user_turns = 0
+    for msg in reversed(history):
+        if msg.get("role") != "user":
+            continue
+        seen_user_turns += 1
+        raw_text = str(msg.get("text") or "").strip().lower()
+        if raw_text and any(term in raw_text for term in LEGAL_DOC_ACTION_TERMS):
+            if any(term in raw_text for term in LEGAL_DOC_SOURCE_TERMS) or ".docx" in raw_text:
+                return True
+        if seen_user_turns >= max_user_turns:
+            break
+    return False
+
+
+def _is_legal_doc_amendment_message(
+    message: str,
+    documents: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
+    low = (message or "").strip().lower()
+    if not low:
+        return False
+    action_match = any(term in low for term in LEGAL_DOC_ACTION_TERMS) or any(
+        term in low
+        for term in (
+            "add",
+            "remove",
+            "adjust",
+            "preserve",
+            "keep",
+            "stay",
+        )
+    )
+    source_match = (
+        any(term in low for term in LEGAL_DOC_SOURCE_TERMS)
+        or any(term in low for term in LEGAL_DOC_FOLLOW_UP_TERMS)
+        or ".docx" in low
+        or any(_uploaded_document_is_docx(doc) for doc in (documents or []))
+    )
+    return action_match and source_match
+
+
+def detect_legal_doc_amend_session_signal(
+    message: str,
+    history: Optional[List[Dict[str, Any]]] = None,
+    *,
+    active: bool = False,
+    documents: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    low = (message or "").strip().lower()
+    legal_doc_request = bool(
+        low
+        and (
+            _detect_legal_doc_workflow(message, documents or [], []).get("active")
+            or (_is_legal_doc_amendment_message(message, documents) and any(_uploaded_document_is_docx(doc) for doc in (documents or [])))
+        )
+    )
+    recent_legal_doc_context = bool(active or _history_has_recent_legal_doc_amend_request(history))
+    is_amendment = bool(low and (not legal_doc_request) and _is_legal_doc_amendment_message(message, documents))
+
+    acceptance_terms = (
+        "accept the delivery",
+        "accept delivery",
+        "accept the result",
+        "accepted the result",
+        "accepted the delivery",
+        "delivery accepted",
+        "result accepted",
+        "done with the docx",
+        "docx is done",
+        "document is done",
+        "essay is done",
+        "looks good",
+        "all good",
+        "that works",
+        "this works",
+        "final now",
+        "finished now",
+    )
+    bare_accept_terms = {
+        "done",
+        "accepted",
+        "finished",
+        "all good",
+        "looks good",
+        "ok done",
+        "okay done",
+    }
+    has_accept_signal = any(term in low for term in acceptance_terms) or low in bare_accept_terms
+    is_acceptance = bool(
+        low
+        and recent_legal_doc_context
+        and (not legal_doc_request)
+        and (not is_amendment)
+        and has_accept_signal
+    )
+
+    return {
+        "is_acceptance": is_acceptance,
+        "is_amendment": is_amendment,
+        "acknowledgement": (
+            "Accepted. The legal-doc amend session and temporary amend artifacts have been cleared. "
+            "If you want another DOCX amend run, send the next document or instruction."
+        ),
+    }
+
+
+def register_legal_doc_amend_cleanup_paths(project_id: str, paths: Optional[Iterable[Any]]) -> None:
+    if not project_id:
+        return
+    session = legal_doc_amend_session_state.setdefault(
+        project_id,
+        {"active": True, "closed_after_acceptance": False, "cleanup_paths": []},
+    )
+    session["active"] = True
+    session["closed_after_acceptance"] = False
+    tracked: List[str] = list(session.get("cleanup_paths") or [])
+    seen = {str(path).strip() for path in tracked if str(path).strip()}
+    for raw in paths or []:
+        if raw is None:
+            continue
+        value = str(raw).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        tracked.append(value)
+    session["cleanup_paths"] = tracked
+
+
+def mark_legal_doc_amend_session_active(project_id: str) -> None:
+    if not project_id:
+        return
+    session = legal_doc_amend_session_state.setdefault(
+        project_id,
+        {"active": False, "closed_after_acceptance": False, "cleanup_paths": []},
+    )
+    session["active"] = True
+    session["closed_after_acceptance"] = False
+
+
+def _complete_answer_path_has_temp_artifact_hint(path: Path) -> bool:
     low = path.name.lower().replace(" ", "_")
-    return any(hint in low for hint in TOPIC_NOTES_ONE_OFF_HINTS)
+    return any(hint in low for hint in COMPLETE_ANSWER_TEMP_ARTIFACT_HINTS)
 
 
-def _cleanup_topic_notes_one_off_artifacts(project_id: str) -> int:
+def _cleanup_complete_answer_temp_artifacts(project_id: str) -> int:
+    session = complete_answer_session_state.setdefault(
+        project_id,
+        {"active": False, "closed_after_acceptance": False, "cleanup_paths": []},
+    )
+    targets: List[Path] = []
+    seen: set[Path] = set()
+    protected_nodes = {
+        Path.home().resolve(),
+        (Path.home() / "Desktop").resolve(),
+        Path(__file__).resolve().parent.resolve(),
+        Path.cwd().resolve(),
+    }
+
+    for raw in session.get("cleanup_paths") or []:
+        try:
+            resolved = Path(str(raw)).expanduser().resolve()
+        except Exception:
+            continue
+        if resolved in seen or resolved in protected_nodes:
+            continue
+        seen.add(resolved)
+        targets.append(resolved)
+
+    runtime_root = (Path.cwd() / ".codex_runtime").resolve()
+    if runtime_root.exists():
+        for node in runtime_root.rglob("*"):
+            if not node.exists():
+                continue
+            if node.is_file() and node.suffix.lower() not in COMPLETE_ANSWER_TEMP_ARTIFACT_SUFFIXES:
+                continue
+            if not _complete_answer_path_has_temp_artifact_hint(node):
+                continue
+            resolved = node.resolve()
+            if resolved in seen or resolved in protected_nodes:
+                continue
+            seen.add(resolved)
+            targets.append(resolved)
+
+    removed = 0
+    for path in targets:
+        try:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=False)
+            else:
+                path.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            continue
+
+    session["cleanup_paths"] = []
+    return removed
+
+
+def _topic_notes_path_has_temp_artifact_hint(path: Path) -> bool:
+    low = path.name.lower().replace(" ", "_")
+    return any(hint in low for hint in TOPIC_NOTES_TEMP_ARTIFACT_HINTS)
+
+
+def _cleanup_topic_notes_temp_artifacts(project_id: str) -> int:
     session = topic_notes_session_state.setdefault(
         project_id,
         {"active": False, "closed_after_acceptance": False, "cleanup_paths": []},
@@ -22228,7 +23011,7 @@ def _cleanup_topic_notes_one_off_artifacts(project_id: str) -> int:
         for node in runtime_root.rglob("*"):
             if not node.exists() or not node.is_file():
                 continue
-            if not _topic_notes_path_has_one_off_hint(node):
+            if not _topic_notes_path_has_temp_artifact_hint(node):
                 continue
             resolved = node.resolve()
             if resolved in seen:
@@ -22240,6 +23023,59 @@ def _cleanup_topic_notes_one_off_artifacts(project_id: str) -> int:
     for path in targets:
         try:
             path.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            continue
+
+    session["cleanup_paths"] = []
+    return removed
+
+def _legal_doc_amend_path_has_temp_artifact_hint(path: Path) -> bool:
+    low = path.name.lower().replace(" ", "_")
+    return any(hint in low for hint in LEGAL_DOC_AMEND_TEMP_ARTIFACT_HINTS)
+
+
+def _cleanup_legal_doc_amend_temp_artifacts(project_id: str) -> int:
+    session = legal_doc_amend_session_state.setdefault(
+        project_id,
+        {"active": False, "closed_after_acceptance": False, "cleanup_paths": []},
+    )
+    targets: List[Path] = []
+    seen: set[Path] = set()
+    protected_nodes = {
+        Path.home().resolve(),
+        (Path.home() / "Desktop").resolve(),
+        Path(__file__).resolve().parent.resolve(),
+    }
+
+    for raw in session.get("cleanup_paths") or []:
+        try:
+            resolved = Path(str(raw)).expanduser().resolve()
+        except Exception:
+            continue
+        if resolved in seen or resolved in protected_nodes:
+            continue
+        seen.add(resolved)
+        targets.append(resolved)
+
+    runtime_root = (Path.cwd() / ".codex_runtime").resolve()
+    if runtime_root.exists():
+        for node in runtime_root.rglob("*"):
+            if not node.exists() or not _legal_doc_amend_path_has_temp_artifact_hint(node):
+                continue
+            resolved = node.resolve()
+            if resolved in seen or resolved in protected_nodes:
+                continue
+            seen.add(resolved)
+            targets.append(resolved)
+
+    removed = 0
+    for path in targets:
+        try:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=False)
+            else:
+                path.unlink(missing_ok=True)
             removed += 1
         except OSError:
             continue
@@ -22445,6 +23281,10 @@ def reset_session(project_id: str):
         del chat_sessions[project_id]
     if project_id in topic_notes_session_state:
         topic_notes_session_state[project_id]["active"] = False
+    if project_id in legal_doc_amend_session_state:
+        legal_doc_amend_session_state[project_id]["active"] = False
+    if project_id in complete_answer_session_state:
+        complete_answer_session_state[project_id]["active"] = False
 
 def _uploaded_document_name(doc: Dict[str, Any]) -> str:
     return str(doc.get("name") or "uploaded_document").strip()
@@ -22735,6 +23575,13 @@ def _shared_legal_backend_guide_excerpt() -> str:
         "authority support for added analysis",
         "marker-feedback clarity rules are mandatory",
         "marker-feedback repetition handling is mandatory",
+        "feedback abstraction and privacy rule is mandatory",
+        "feedback-led anti-vagueness sweep is mandatory",
+        "implicit-question clarity rule is mandatory",
+        "comparative and superlative claims must be quantified or calibrated",
+        "coined / literature-specific term attribution rule is mandatory",
+        "thin-section / orphan-subheading rule is mandatory",
+        "chapter-integration rule is mandatory",
         "jurisdiction-specific wording discipline is mandatory",
         "fact-matched actor labels are mandatory",
         "directly usable amended wording",
@@ -22750,7 +23597,7 @@ def _shared_legal_backend_guide_excerpt() -> str:
         lowered = simplified.lower()
         if any(token in lowered for token in wanted):
             selected.append(simplified)
-        if len(selected) >= 12:
+        if len(selected) >= 24:
             break
     return "\n".join(f"- {line}" for line in selected)
 
@@ -22781,6 +23628,7 @@ def _build_local_code_rag_answer_prompt_block(
         "- Answer the actual benchmark/question fully: cover the material issues, use stronger authorities where available, address counterarguments where they matter, and finish with a reasoned conclusion.",
         "- Prefer one complete answer in a single response. Do not stop at an issue list, research memo, or partial analysis unless the user expressly asks for that narrower format.",
         "- Explicit user requirements remain binding: word limits, citation style, jurisdiction limits, exclusions, benchmark/rubric instructions, and requested output shape override generic defaults.",
+        "- Learn from reviewer/user feedback at rule level: generalise the drafting lesson and apply it across analogous issues, but do not carry forward document-specific confidential content as reusable default text.",
     ]
     guide_excerpt = _local_legal_answer_guide_excerpt()
     if guide_excerpt:
@@ -22803,6 +23651,28 @@ def _find_codex_cli() -> str:
         if Path(candidate).exists():
             return candidate
     return ""
+
+
+@lru_cache(maxsize=4)
+def _codex_exec_help_text(codex_cli: str) -> str:
+    try:
+        completed = subprocess.run(
+            [codex_cli, "exec", "--help"],
+            text=True,
+            capture_output=True,
+            cwd=str(Path(__file__).resolve().parent),
+            timeout=15,
+        )
+    except Exception:
+        return ""
+    return "\n".join(
+        part for part in [completed.stdout or "", completed.stderr or ""] if part.strip()
+    )
+
+
+def _codex_exec_supports_option(codex_cli: str, option: str) -> bool:
+    help_text = _codex_exec_help_text(codex_cli)
+    return option in help_text if help_text else False
 
 
 def _resolve_existing_codex_home() -> Optional[Path]:
@@ -23000,7 +23870,6 @@ def _generate_with_codex_local_adapter(
         cmd = [
             codex_cli,
             "exec",
-            "--ephemeral",
             "--skip-git-repo-check",
             "--sandbox",
             "read-only",
@@ -23009,6 +23878,8 @@ def _generate_with_codex_local_adapter(
             "-o",
             str(output_file),
         ]
+        if _codex_exec_supports_option(codex_cli, "--ephemeral"):
+            cmd.insert(2, "--ephemeral")
         if configured_model:
             cmd.extend(["-m", configured_model])
         if allow_web_search and _truthy_env("LEGAL_AI_CODEX_LOCAL_ALLOW_SEARCH"):
@@ -23137,6 +24008,8 @@ def _build_legal_doc_workflow_prompt_block(
         "- Every added substantive point must be supported by a real, verified authority or rewritten more cautiously.",
         "- Never invent citations, metadata, quotations, pinpoint references, or recent developments.",
         "- Keep word-count instructions strict: if the user gives a target or cap, stay within it; otherwise keep the draft broadly stable in length while improving quality.",
+        "- If a sentence would provoke 'Compared with what?', 'From what?', 'Harmed how?', or 'With what effect?', answer that explicitly rather than leaving the mechanism or comparator implicit.",
+        "- Quantify or calibrate comparative and superlative claims. Do not present 'highest', 'most', or similar absolutes unless the source really supports that level.",
     ]
     if _uses_inline_oscola_house_style(citation_style):
         lines.append("- Active citation style: OSCOLA by default unless the user expressly requested another style.")
@@ -23150,6 +24023,7 @@ def _build_legal_doc_workflow_prompt_block(
             "- When the user asks for amendments, follow the same substantive standard as the local legal-review amend workflow: full review quality first, then direct implemented wording rather than generic feedback.",
             "- For DOCX amend requests, your job is to generate the strongest verified replacement wording and corrected footnote text; the downstream DOCX engine preserves styling and applies yellow-highlight-only markup to changed wording.",
             "- Preserve the user's exact local DOCX styling for amended wording: same font family, font size, paragraph style, spacing, colour, and local emphasis pattern as the surrounding original text. Do not flatten a paragraph or footnote into one generic template style if the user originally used mixed local styling.",
+            "- Never normalize the user's line spacing in DOCX amend mode. If the original paragraph uses 1.5-line spacing, keep 1.5-line spacing; if it uses double spacing, keep double spacing. Match the exact local paragraph spacing already used there.",
             "- Do not rewrite an original footnote that is already accurate just for stylistic tidiness.",
             "- Footnote text for DOCX amendment workflows must be plain text only: no literal markdown emphasis markers such as `*...*`, `**...**`, or backticks.",
         ])
@@ -23304,13 +24178,33 @@ def send_message_with_docs(
     resolved_model_name = resolve_model_name_for_provider(resolved_provider, model_name)
 
     notes_session = topic_notes_session_state.get(project_id, {"active": False, "closed_after_acceptance": False})
+    legal_doc_session = legal_doc_amend_session_state.get(
+        project_id,
+        {"active": False, "closed_after_acceptance": False},
+    )
+    complete_answer_session = complete_answer_session_state.get(
+        project_id,
+        {"active": False, "closed_after_acceptance": False},
+    )
     notes_signal = detect_topic_notes_session_signal(
         message,
         history,
         active=bool(notes_session.get("active")),
     )
+    legal_doc_signal = detect_legal_doc_amend_session_signal(
+        message,
+        history,
+        active=bool(legal_doc_session.get("active")),
+        documents=documents,
+    )
+    complete_answer_signal = detect_complete_answer_session_signal(
+        message,
+        history,
+        active=bool(complete_answer_session.get("active")),
+        documents=documents,
+    )
     if notes_signal.get("is_acceptance"):
-        _cleanup_topic_notes_one_off_artifacts(project_id)
+        _cleanup_topic_notes_temp_artifacts(project_id)
         reset_session(project_id)
         topic_notes_session_state[project_id] = {
             "active": False,
@@ -23321,12 +24215,57 @@ def send_message_with_docs(
         if stream:
             return iter([acknowledgement]), None
         return (acknowledgement, []), None
+    if legal_doc_signal.get("is_acceptance"):
+        _cleanup_legal_doc_amend_temp_artifacts(project_id)
+        reset_session(project_id)
+        legal_doc_amend_session_state[project_id] = {
+            "active": False,
+            "closed_after_acceptance": True,
+            "cleanup_paths": [],
+        }
+        acknowledgement = (
+            legal_doc_signal.get("acknowledgement")
+            or "Accepted. The legal-doc amend session has been cleared."
+        )
+        if stream:
+            return iter([acknowledgement]), None
+        return (acknowledgement, []), None
+    if complete_answer_signal.get("is_acceptance"):
+        _cleanup_complete_answer_temp_artifacts(project_id)
+        reset_session(project_id)
+        complete_answer_session_state[project_id] = {
+            "active": False,
+            "closed_after_acceptance": True,
+            "cleanup_paths": [],
+        }
+        acknowledgement = (
+            complete_answer_signal.get("acknowledgement")
+            or "Accepted. The complete-answer session has been cleared."
+        )
+        if stream:
+            return iter([acknowledgement]), None
+        return (acknowledgement, []), None
 
     initial_topic_notes_mode = detect_topic_notes_request(message)
     if initial_topic_notes_mode.get("is_topic_notes") and notes_session.get("closed_after_acceptance"):
         reset_session(project_id)
         history = []
         notes_session = {"active": False, "closed_after_acceptance": False, "cleanup_paths": []}
+    if _detect_legal_doc_workflow(message, documents, []).get("active") and legal_doc_session.get("closed_after_acceptance"):
+        reset_session(project_id)
+        history = []
+        legal_doc_session = {"active": False, "closed_after_acceptance": False, "cleanup_paths": []}
+    initial_complete_answer_request = _looks_like_complete_answer_request_message(message, documents)
+    if initial_complete_answer_request and complete_answer_session.get("closed_after_acceptance"):
+        reset_session(project_id)
+        history = []
+        complete_answer_session = {"active": False, "closed_after_acceptance": False, "cleanup_paths": []}
+    if initial_complete_answer_request:
+        complete_answer_session_state[project_id] = {
+            "active": True,
+            "closed_after_acceptance": False,
+            "cleanup_paths": list(complete_answer_session_state.get(project_id, {}).get("cleanup_paths") or []),
+        }
 
     def _is_internal_control_prompt(msg: str) -> bool:
         """
@@ -24132,6 +25071,7 @@ def send_message_with_docs(
     is_internal_control_prompt = _is_internal_control_prompt(message)
     any_topic_prompt = _is_any_topic_essay_prompt(message) and (not is_internal_control_prompt)
     topic_notes_mode = detect_topic_notes_request(message)
+    mcq_workflow_mode = detect_mcq_workflow_request(message)
     if topic_notes_mode.get("is_topic_notes"):
         topic_notes_session_state[project_id] = {
             "active": True,
@@ -24517,6 +25457,23 @@ def send_message_with_docs(
                 "- Keep the privacy/fairness paradox concise and explicit: effective bias auditing may require sensitive data, while data-minimisation rules discourage collecting it; explain why 'fairness through unawareness' is inadequate.",
                 "- Distinguish clearly between diagnosis and prescription: first explain why indirect/disparate-impact routes are the main current tool, then argue for burden-shifting, disclosure duties, fairness duties, safe harbours, or regulator audit powers only if justified.",
                 "- Keep the conclusion decisive and short. Do not re-argue the whole essay after the conclusion heading.",
+            ])
+
+        if any(k in low for k in [
+            "artificial intelligence", "generative ai", "large language model", "llm",
+            "section 230", "ai act", "clearview", "carpenter", "data broker",
+            "surveillance", "neural data", "neurorights", "digital colonialism",
+            "privacy nihilism", "brussels effect",
+        ]):
+            _add([
+                "[TOPIC-SPECIFIC GUIDANCE — AI / TECH GOVERNANCE (REGULATION / LIABILITY / PRIVACY)]",
+                "- Keep the structure tight: doctrinal or regulatory gap -> current workaround or liability route -> comparative model or reform debate -> emerging pressure point -> short conclusion.",
+                "- Do not leave comparative US/EU/UK material at taxonomy level only; explain the concrete legal, compliance, litigation, or enforcement consequence of each difference.",
+                "- If you say a system or practice harms people, specify the mechanism: surveillance, exclusion, ranking, denial, pricing, leverage, or another concrete route.",
+                "- Define and attribute distinctive literature labels on first use rather than dropping terms such as digital colonialism, privacy nihilism, or AI harbour as slogans.",
+                "- Distinguish diagnosis from prescription: first explain the present legal gap and why it matters, then justify the reform proposal rather than jumping straight to preferred policy.",
+                "- If a late section turns to neural data or another emerging technology, explain explicitly why it sharpens the paper's main thesis about regulatory lag or under-protection instead of leaving it as a detached add-on.",
+                "- Avoid multiplying micro-sections for closely related regulatory themes. If two adjacent sections perform the same analytical job, merge them and let one stronger section carry the point.",
             ])
 
         if any(k in low for k in [
@@ -25086,6 +26043,18 @@ def send_message_with_docs(
 
     uploaded_materials = _collect_uploaded_materials(documents)
     legal_doc_workflow = _detect_legal_doc_workflow(message, documents, uploaded_materials)
+    if legal_doc_workflow.get("active"):
+        legal_doc_amend_session_state[project_id] = {
+            "active": True,
+            "closed_after_acceptance": False,
+            "cleanup_paths": list(legal_doc_amend_session_state.get(project_id, {}).get("cleanup_paths") or []),
+        }
+    elif legal_doc_signal.get("is_amendment") and legal_doc_session.get("active"):
+        legal_doc_amend_session_state[project_id] = {
+            "active": True,
+            "closed_after_acceptance": False,
+            "cleanup_paths": list(legal_doc_amend_session_state.get(project_id, {}).get("cleanup_paths") or []),
+        }
     rag_required_for_request = _backend_request_requires_mandatory_rag(message, legal_doc_workflow)
     uploaded_material_query_context = _build_uploaded_material_query_context(
         uploaded_materials,
@@ -25622,6 +26591,13 @@ This means your retrieved sources are THIN. You MUST:
                 has_uploaded_materials=bool(uploaded_materials),
             )
         )
+    elif mcq_workflow_mode.get("active"):
+        parts.append(
+            _build_mcq_workflow_prompt_block(
+                mcq_workflow_mode,
+                citation_style=requested_citation_style,
+            )
+        )
     
     # FEATURE 1: Detect if user is asking for specific paragraph improvements
     para_improvement = detect_specific_para_improvement(message)
@@ -25659,6 +26635,15 @@ You MUST:
     
     if topic_notes_mode.get("is_topic_notes"):
         parts.append(_build_topic_notes_citation_block(requested_citation_style))
+    elif mcq_workflow_mode.get("active"):
+        parts.append(
+            "\n".join([
+                "[MCQ CITATION / AUTHORITY RULE]",
+                "- This MCQ workflow is citation-free by default.",
+                "- Do NOT add inline citations, bibliographies, or authorities lists unless the user expressly asks for them.",
+                "- Accuracy still remains strict: use only retrieved or otherwise verified law behind the answer key and explanations.",
+            ])
+        )
     else:
         parts.append(_build_active_citation_style_reminder(requested_citation_style))
         parts.append(_build_active_citation_style_quality_gate(requested_citation_style))
@@ -25672,6 +26657,16 @@ You MUST:
 - Start with the notes title line, then the subtitle line, then `How to use these notes`.
 - Use `Topic N: ...` headings, `REVISION FRAME`, `Argument N`, support blocks, and `Add / check in a problem question` bullets.
 - Keep the output compact, exam-usable, and organised by doctrinal topic rather than essay flow.
+"""
+    elif mcq_workflow_mode.get("active"):
+        structure_reinforcement = """
+[STRUCTURE ENFORCEMENT — MCQ WORKFLOW MODE]
+- This is an MCQ correction/generation task, not an essay or problem answer.
+- Do NOT use `Part I: Introduction`, `Part II`, `Conclusion`, `Final Conclusion`, or a global `Title:` line.
+- Correction mode must start with `Corrected overall result`, then `Correct:`, `Incorrect:`, and `Defective question:`.
+- Generation mode must start directly with `Question 1 – ...`, then `Question`, then the MCQ stem and options.
+- Keep one question block per question number and do not blend explanations across questions.
+- Do NOT output `Answer 1:` / `Answer 2:` wrappers or essay-style roadmap paragraphs.
 """
     elif continuation_info_rt.get("is_continuation"):
         structure_reinforcement = """
@@ -25737,6 +26732,21 @@ If ANY text appears before "Part I:" you have FAILED the structure requirement.
 7) Counterarguments: where retrieval supports a real dispute, include the orthodox line and the strongest counter-view or academic critique.
 8) No essay drift: do not switch into essay introductions, Part-numbered headings, or generic conclusion prose.
 9) No padding: compact, high-signal notes only.
+
+If any check fails, revise internally and fix it BEFORE output.
+Do NOT print this checklist.
+"""
+        deferred_general_law_gates.append(final_quality_gate)
+    elif mcq_workflow_mode.get("active"):
+        final_quality_gate = """
+[MCQ QUALITY GATE — RUN SILENTLY BEFORE YOU OUTPUT]
+1) Accuracy: every question, answer key, and explanation must be supported by retrieved or otherwise verified legal material.
+2) Format: use the MCQ workflow scaffold only; no essay/problem headings.
+3) Single-best-answer discipline: there must be one clearly strongest answer, not two roughly equal options.
+4) Correction integrity: if the user supplied a `My answer`, preserve it accurately and mark the result correctly.
+5) Generation integrity: if the user asked for new questions only, do not reveal answers.
+6) Defective-item discipline: if a question is genuinely ambiguous or unsupported, mark it defective or replace it; do not guess.
+7) Novelty: if the user asked for no repeats, avoid reusing the same stems, fact patterns, or tested propositions from prior visible sets.
 
 If any check fails, revise internally and fix it BEFORE output.
 Do NOT print this checklist.
@@ -27844,22 +28854,28 @@ Use this as a default issue-map; adapt the internal order to the exact question 
 
    c) NEW YORK CONVENTION 1958:
       - Art II(3): refer to arbitration unless agreement null/void/inoperative
-      - Art V(1): procedural grounds for refusal (incapacity, no proper notice, excess jurisdiction)
-      - Art V(2)(b): public policy ground — narrowly construed as "international public policy"
+      - Art V(1)(b): inability to present the case / fair-hearing complaint
+      - Art V(1)(c): excess of submission / issues not referred
+      - Art V(1)(d): composition/procedure not in accordance with party agreement or law of seat
+      - Art V(2)(b): public policy of the enforcing state — narrow and usually strongest only for serious procedural injustice, corruption, or non-arbitrability
       - Pro-enforcement bias: refusal is discretionary ("may" refuse, not "shall")
+      - Strategic sequencing matters: seat challenge can have system-wide consequences; foreign resistance is usually local and narrower
 
    d) EVALUATION:
       - Take a CLEAR POSITION on whether the balance is appropriate
       - Consider: over-judicialisation risk vs accountability gap risk
       - Delocalisation theory (Paulsson) vs seat theory — should awards be anchored to any legal order?
       - Modern trend: minimal court interference + maximum enforcement (pro-arbitration)
+      - For current English-law answers, note the Arbitration Act 2025 reforms rather than freezing the analysis at a pre-2025 stage
 
 2. KEY AUTHORITIES:
-   - Arbitration Act 1996, ss 1, 33, 44, 46, 67-69 (English lex arbitri)
+   - Arbitration Act 1996, ss 1, 33, 44, 46, 67-70 (English lex arbitri), read in the current post-2025 form
+   - Arbitration Act 2025 — current reforms on the law governing the arbitration agreement, disclosure, summary disposal, and the revised section 67 framework
    - UNCITRAL Model Law 1985 (as amended 2006), Arts 28, 34, 36
    - New York Convention 1958, Arts II, V
-   - Dallah Real Estate v Ministry of Religious Affairs [2010] UKSC 46 — seat court review of jurisdiction
-   - Enka v Chubb [2020] UKSC 38 — governing law of arbitration agreement
+   - Dallah Real Estate v Ministry of Religious Affairs [2010] UKSC 46 — pre-2025 leading authority on seat-court review of jurisdiction; update it for the revised post-2025 section 67 position
+   - Enka v Chubb [2020] UKSC 38 — older common-law approach to governing law of the arbitration agreement; note the post-2025 statutory replacement where relevant
+   - Halliburton Company v Chubb Bermuda Insurance Ltd [2020] UKSC 48 — impartiality and disclosure
    - UniCredit Bank GmbH v RusChemAlliance LLC [2024] UKSC 30 — anti-suit injunctions, supervisory role
    - Lesotho Highlands v Impregilo [2005] UKHL 43 — s 68 serious irregularity
    - Jivraj v Hashwani [2011] UKSC 40 — arbitrator status and discrimination
@@ -29978,7 +30994,11 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
             )
 
     # Multi-question separation guard for single-shot responses (no continuation, no long split).
-    if (not long_essay_info.get('is_long_essay')) and (not continuation_info.get('is_continuation')):
+    if (
+        (not mcq_workflow_mode.get("active"))
+        and (not long_essay_info.get('is_long_essay'))
+        and (not continuation_info.get('is_continuation'))
+    ):
         units_for_sep = _extract_units_with_text(message)
         if len(units_for_sep) >= 2:
             heading_lines = []
@@ -30010,8 +31030,9 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
         is_continuation_turn = bool(continuation_info.get("is_continuation"))
         is_long_answer_turn = bool(long_essay_info.get("is_long_essay"))
         legal_doc_requires_google = bool(legal_doc_workflow.get("active"))
+        mcq_requires_google = bool(mcq_workflow_mode.get("active"))
         allow_google_fallback = bool(
-            legal_doc_requires_google or (
+            legal_doc_requires_google or mcq_requires_google or (
                 ENABLE_GOOGLE_GROUNDING_FALLBACK
                 and ((not is_continuation_turn) or ALLOW_GOOGLE_FALLBACK_FOR_CONTINUATIONS)
                 and ((not is_long_answer_turn) or ALLOW_GOOGLE_FALLBACK_FOR_LONG_ANSWERS)
@@ -30026,6 +31047,10 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
             fallback_reasons.append(
                 "uploaded legal-document review/amend flow requires search-backed verification alongside RAG"
             )
+        if mcq_requires_google:
+            fallback_reasons.append(
+                "MCQ correction/generation mode requires search-backed verification alongside RAG for answer-key accuracy"
+            )
         if coverage_insufficient:
             fallback_reasons.append(coverage_reason)
         if weak_retrieval:
@@ -30036,7 +31061,7 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
             fallback_reasons.append(
                 f"local index coverage thin ({int(local_index_coverage.get('matched_count', 0) or 0)}/{int(local_index_coverage.get('target_count', 0) or 0)} core authority name hits)"
             )
-        if fallback_reasons and (heuristic.get("use_google_search") or legal_doc_requires_google):
+        if fallback_reasons and (heuristic.get("use_google_search") or legal_doc_requires_google or mcq_requires_google):
             fallback_reasons.append(f"heuristic={str(heuristic.get('reason') or 'weak-rag trigger')}")
 
         if fallback_reasons and allow_google_fallback:
@@ -30051,6 +31076,8 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
                     (
                         "This uploaded-document legal workflow requires RAG plus Google-grounded verification/supplementation."
                         if legal_doc_requires_google
+                        else "This MCQ correction/generation workflow requires RAG plus Google-grounded verification for answer accuracy."
+                        if mcq_requires_google
                         else "RAG retrieval or indexed authority coverage is too weak to rely on alone for this legal query."
                     ),
                     "Use Google Search grounding only to verify, strengthen, or fill missing authority coverage.",
@@ -30087,6 +31114,8 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
     # Final override to resolve legacy prompt contradictions.
     if topic_notes_mode.get("is_topic_notes"):
         parts.append(_build_topic_notes_override_block(requested_citation_style))
+    elif mcq_workflow_mode.get("active"):
+        parts.append(_build_mcq_workflow_override_block(mcq_workflow_mode))
     else:
         parts.append(_build_active_citation_style_override(requested_citation_style))
 
@@ -30155,7 +31184,8 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
         )
     )
     should_enforce_inline_oscola_policy = (
-        _is_legal_query_text(essay_policy_prompt or grounding_query or message)
+        (not mcq_workflow_mode.get("active"))
+        and _is_legal_query_text(essay_policy_prompt or grounding_query or message)
         and _uses_inline_oscola_house_style(requested_citation_style)
     )
     should_enforce_long_part_conclusion_policy = bool(
@@ -30172,13 +31202,14 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
     explicit_issue_heads = _extract_explicit_issue_heads(coverage_query)
     # Coverage regeneration on every continuation part can induce repetition.
     # Apply this guard to non-continuation turns, or to final continuation parts only.
-    should_enforce_issue_coverage = (not FAST_GENERATION_MODE) and bool(explicit_issue_heads) and (
+    should_enforce_issue_coverage = (not mcq_workflow_mode.get("active")) and (not FAST_GENERATION_MODE) and bool(explicit_issue_heads) and (
         (not continuation_info.get('is_continuation'))
         or bool(require_conclusion_this_response)
     )
     units_for_structure_check = _extract_units_with_text(message)
     should_enforce_multi_question_structure = (
-        (not continuation_info.get('is_continuation'))
+        (not mcq_workflow_mode.get("active"))
+        and (not continuation_info.get('is_continuation'))
         and (not long_essay_info.get('is_long_essay'))
         and len(units_for_structure_check) >= 2
     )
@@ -30202,7 +31233,8 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
         )
     )
     should_enforce_unit_structure_policy = (
-        (
+        (not mcq_workflow_mode.get("active"))
+        and (
             require_question_heading_this_response
             or (current_unit_kind_hint in {"essay", "problem"})
             or should_enforce_short_problem_completion

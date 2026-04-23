@@ -20,6 +20,10 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         "Please amend Principles.docx to a 90+ standard.",
         search_roots=[desktop],
     ) is True
+    assert workflow.wants_local_legal_doc_amend(
+        'Please based on code guide amend "Principles.docx".',
+        search_roots=[desktop],
+    ) is True
     assert workflow.resolve_local_legal_doc_amend_path(
         "Please amend Principles.docx to a 90+ standard.",
         search_roots=[desktop],

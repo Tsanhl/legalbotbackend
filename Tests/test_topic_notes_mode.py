@@ -10,7 +10,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from model_applicable_service import (
     QUERY_CHUNK_CONFIG,
-    _cleanup_topic_notes_one_off_artifacts,
+    _cleanup_topic_notes_temp_artifacts,
     detect_all_query_types,
     detect_topic_notes_request,
     detect_topic_notes_session_signal,
@@ -57,7 +57,7 @@ runtime_dir.mkdir(exist_ok=True)
 cleanup_target = runtime_dir / "topic_notes_sample_cleanup_test.txt"
 cleanup_target.write_text("temporary notes sample", encoding="utf-8")
 register_topic_notes_cleanup_paths("notes_cleanup_test", [cleanup_target])
-removed_count = _cleanup_topic_notes_one_off_artifacts("notes_cleanup_test")
+removed_count = _cleanup_topic_notes_temp_artifacts("notes_cleanup_test")
 assert removed_count >= 1
 assert not cleanup_target.exists()
 
@@ -73,7 +73,7 @@ register_topic_notes_cleanup_paths(acceptance_project_id, [acceptance_target])
     history=history,
     stream=False,
 )
-assert "one-off runtime notes artifacts have been cleared" in accept_text
+assert "temporary runtime notes artifacts have been cleared" in accept_text
 assert not acceptance_target.exists()
 
 note_text = """

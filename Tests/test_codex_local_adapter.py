@@ -85,10 +85,12 @@ finally:
 original_find = gs._find_codex_cli
 original_run = gs.subprocess.run
 original_prepare_runtime_home = gs._prepare_codex_runtime_home
+original_supports_option = gs._codex_exec_supports_option
 original_network_env = os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED")
 original_allow_env = os.environ.get("LEGAL_AI_CODEX_ALLOW_NETWORK_DISABLED")
 try:
     gs._find_codex_cli = lambda: "/fake/codex"
+    gs._codex_exec_supports_option = lambda cli, option: False
     os.environ.pop("CODEX_SANDBOX_NETWORK_DISABLED", None)
     os.environ["LEGAL_AI_CODEX_ALLOW_NETWORK_DISABLED"] = "1"
 
@@ -106,7 +108,7 @@ try:
     def _fake_run(cmd, input, text, capture_output, cwd, env, timeout):
         assert cmd[0] == "/fake/codex"
         assert "exec" in cmd
-        assert "--ephemeral" in cmd
+        assert "--ephemeral" not in cmd
         output_idx = cmd.index("-o") + 1
         out_path = Path(cmd[output_idx])
         out_path.write_text("Part I: Introduction\n\nLocal codex answer.", encoding="utf-8")
@@ -128,6 +130,7 @@ finally:
     gs._find_codex_cli = original_find
     gs.subprocess.run = original_run
     gs._prepare_codex_runtime_home = original_prepare_runtime_home
+    gs._codex_exec_supports_option = original_supports_option
     if original_network_env is None:
         os.environ.pop("CODEX_SANDBOX_NETWORK_DISABLED", None)
     else:

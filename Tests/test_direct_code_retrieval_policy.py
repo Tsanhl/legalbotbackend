@@ -41,7 +41,12 @@ assert "complete end-product answer" in direct_answer_prompt
 assert "Use indexed RAG material first." in direct_answer_prompt
 assert "Shared legal backend guide anchors:" in direct_answer_prompt
 assert "Marker-feedback clarity rules are mandatory." in direct_answer_prompt
+assert "Feedback abstraction and privacy rule is mandatory." in direct_answer_prompt
 assert "Fact-matched actor labels are mandatory." in direct_answer_prompt
+assert "Implicit-question clarity rule is mandatory." in direct_answer_prompt
+assert "Comparative and superlative claims must be quantified or calibrated." in direct_answer_prompt
+assert "Chapter-integration rule is mandatory." in direct_answer_prompt
+assert "generalise the drafting lesson and apply it across analogous issues" in direct_answer_prompt
 
 assert _build_local_code_rag_answer_prompt_block(
     "Answer this judicial review problem question using code + rag.",

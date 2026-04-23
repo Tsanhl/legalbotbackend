@@ -54,12 +54,16 @@ try:
         detect_topic_notes_request,
         _infer_retrieval_profile,
         _subissue_queries_for_unit,
+        register_complete_answer_cleanup_paths,
+        register_legal_doc_amend_cleanup_paths,
         register_topic_notes_cleanup_paths,
     )
 except Exception:
     _backend_request_requires_mandatory_rag = None
     detect_topic_notes_request = None
     _infer_retrieval_profile = None
+    register_complete_answer_cleanup_paths = None
+    register_legal_doc_amend_cleanup_paths = None
     register_topic_notes_cleanup_paths = None
     _subissue_queries_for_unit = None
 
@@ -88,9 +92,13 @@ BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT = "markdown_artifact"
 BACKEND_ANSWER_OUTPUT_DOCX_ARTIFACT = "docx_artifact"
 BACKEND_COMPLETE_ANSWER_REGEN_MAX_ATTEMPTS = 1
 BACKEND_ANSWER_ARTIFACT_DESKTOP_ROOT = (Path.home() / "Desktop").resolve()
-BACKEND_ANSWER_ONE_OFF_HINTS = (
+BACKEND_ANSWER_TASK_ARTIFACT_HINTS = (
     "one_off",
     "one-off",
+    "task_specific",
+    "task-specific",
+    "temporary",
+    "transient",
     "tmp",
     "temp",
     "scratch",
@@ -100,7 +108,7 @@ BACKEND_ANSWER_ONE_OFF_HINTS = (
     "prompt_dump",
     "question_pack",
 )
-BACKEND_ANSWER_ONE_OFF_SUFFIXES = {
+BACKEND_ANSWER_TASK_ARTIFACT_SUFFIXES = {
     ".txt",
     ".md",
     ".json",
@@ -285,9 +293,9 @@ def _path_is_within(path: Path, root: Path) -> bool:
         return False
 
 
-def _backend_answer_name_has_one_off_hint(path: Path) -> bool:
+def _backend_answer_name_has_task_artifact_hint(path: Path) -> bool:
     low = path.name.lower().replace(" ", "_")
-    return any(hint in low for hint in BACKEND_ANSWER_ONE_OFF_HINTS)
+    return any(hint in low for hint in BACKEND_ANSWER_TASK_ARTIFACT_HINTS)
 
 
 def _normalize_complete_answer_cleanup_paths(paths: Optional[List[Any]]) -> List[Path]:
@@ -325,22 +333,22 @@ def _is_complete_answer_cleanup_candidate(path: Path) -> bool:
         return any(
             node != project_root
             and _path_is_within(node, project_root)
-            and _backend_answer_name_has_one_off_hint(node)
+            and _backend_answer_name_has_task_artifact_hint(node)
             for node in relevant_nodes
         )
 
-    if resolved.suffix.lower() not in BACKEND_ANSWER_ONE_OFF_SUFFIXES:
+    if resolved.suffix.lower() not in BACKEND_ANSWER_TASK_ARTIFACT_SUFFIXES:
         return False
 
     return any(
         node != project_root
         and _path_is_within(node, project_root)
-        and _backend_answer_name_has_one_off_hint(node)
+        and _backend_answer_name_has_task_artifact_hint(node)
         for node in relevant_nodes
     )
 
 
-def _cleanup_complete_answer_one_off_artifacts(
+def _cleanup_complete_answer_task_artifacts(
     paths: Optional[List[Any]],
     *,
     protected_paths: Optional[List[Any]] = None,
@@ -612,6 +620,35 @@ def _missing_profile_prompt_map_asks(answer_text: str, prompt_text: str) -> List
     return [m for m in missing if m]
 
 
+_INLINE_AUTHORITY_PAREN_RE = re.compile(
+    r"\((?:[^()\n]|\([0-9A-Za-z]+\)){3,260}\)",
+    flags=re.IGNORECASE,
+)
+_INLINE_AUTHORITY_SIGNAL_RE = re.compile(
+    r"(?:"
+    r"\[[12]\d{3}\]"
+    r"|\((?:1[89]\d{2}|20\d{2})\)"
+    r"|(?:Act|Regulations)\s+\d{4}"
+    r"|Article\s+\d+(?:\([0-9A-Za-z]+\))*"
+    r"|art(?:s)?\.?\s+[IVXLCDM0-9]+(?:\([0-9A-Za-z]+\))*(?:\s*,\s*[IVXLCDM0-9]+(?:\([0-9A-Za-z]+\))*)*"
+    r"|(?:section|sections|s\.?)\s*\d+[a-z]?(?:\([0-9A-Za-z]+\))*"
+    r"|\b(?:AC|QB|Ch|WLR|All\s+ER|EWHC|EWCA|UKSC|HL|LR)\b"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+
+def _iter_inline_authority_parentheticals(text: str):
+    src = text or ""
+    for match in _INLINE_AUTHORITY_PAREN_RE.finditer(src):
+        if _INLINE_AUTHORITY_SIGNAL_RE.search(match.group(0)):
+            yield match.group(0)
+
+
+def _has_inline_authority_parenthetical(text: str) -> bool:
+    return any(_iter_inline_authority_parentheticals(text or ""))
+
+
 def _complete_answer_sentence_support_issues(answer_text: str) -> List[str]:
     """
     Deterministic sentence-support verification for complete answers.
@@ -624,7 +661,7 @@ def _complete_answer_sentence_support_issues(answer_text: str) -> List[str]:
     if not txt:
         return []
 
-    sentence_candidates = re.split(r"(?<=[.!?])\s+", txt)
+    sentence_candidates = re.split(r"(?<=[.!?])\s+|\n\s*\n", txt)
     missing: List[str] = []
 
     legal_signal_terms = {
@@ -642,10 +679,6 @@ def _complete_answer_sentence_support_issues(answer_text: str) -> List[str]:
     case_pat = re.compile(
         r"\b([A-Z][A-Za-z0-9'’.\-]*(?:\s+[A-Za-z][A-Za-z0-9'’.\-]*){0,10})\s+v\.?\s+"
         r"([A-Z][A-Za-z0-9'’.\-]*(?:\s+[A-Za-z][A-Za-z0-9'’.\-]*){0,10})\b"
-    )
-    inline_oscola_pat = re.compile(
-        r"\([^()\n]{3,260}(?:\[[12]\d{3}\]|Act\s+\d{4}|Article\s+\d+(?:\(\d+\))?|section\s+\d+|s\.?\s*\d+)",
-        flags=re.IGNORECASE,
     )
     harvard_pat = re.compile(
         r"\((?:[A-Z][A-Za-z&.\-'\s]{1,80}|[A-Z][A-Za-z][^()\n]{0,100}),\s*(?:\d{4}[a-z]?|n\.d\.|no date)(?:,\s*(?:p{1,2}\.|para\.?)\s*[^)]+)?\)",
@@ -684,7 +717,7 @@ def _complete_answer_sentence_support_issues(answer_text: str) -> List[str]:
 
     def _has_inline_support(s: str) -> bool:
         stripped = (s or "").strip()
-        return bool(inline_oscola_pat.search(stripped) or harvard_pat.search(stripped))
+        return bool(_has_inline_authority_parenthetical(stripped) or harvard_pat.search(stripped))
 
     for sent in sentence_candidates:
         s = (sent or "").strip()
@@ -874,9 +907,20 @@ def send_complete_answer_with_docs(
         callable(detect_topic_notes_request)
         and detect_topic_notes_request(message or "").get("is_topic_notes")
     )
+    legal_doc_amend_request_active = bool(
+        cleanup_paths
+        and (
+            wants_local_legal_doc_amend(message)
+            or wants_legal_doc_amend(message, documents or [])
+        )
+    )
 
+    if callable(register_complete_answer_cleanup_paths):
+        register_complete_answer_cleanup_paths(project_id, cleanup_paths)
     if notes_request_active and callable(register_topic_notes_cleanup_paths) and cleanup_paths:
         register_topic_notes_cleanup_paths(project_id, cleanup_paths)
+    if legal_doc_amend_request_active and callable(register_legal_doc_amend_cleanup_paths):
+        register_legal_doc_amend_cleanup_paths(project_id, cleanup_paths)
 
     if stream and delivery_mode in {
         BACKEND_ANSWER_OUTPUT_MARKDOWN_ARTIFACT,
@@ -899,7 +943,7 @@ def send_complete_answer_with_docs(
         protected_cleanup_paths: List[Any] = []
         if artifact_info and artifact_info.get("path"):
             protected_cleanup_paths.append(artifact_info["path"])
-        _cleanup_complete_answer_one_off_artifacts(
+        _cleanup_complete_answer_task_artifacts(
             cleanup_paths,
             protected_paths=protected_cleanup_paths,
         )
@@ -3436,9 +3480,9 @@ def _essay_quality_issues(
             break
 
     # Placeholder / malformed citation artefacts.
-    if re.search(r"\(\s*[A-Za-z]\s*\)", txt):
+    if re.search(r"(?<!\d\))\(\s*[A-Za-z]\s*\)", txt):
         issues.append("Contains placeholder citation markers like '(J )'.")
-    if re.search(r"\(\s*\[\s*\d+\s*\]\s*\)|\[\s*\d+\s*\]", txt):
+    if re.search(r"\(\s*\[\s*\d{1,3}\s*\]\s*\)|\[\s*\d{1,3}\s*\]", txt):
         issues.append("Contains placeholder numeric citation markers instead of usable legal authorities.")
     if re.search(r"\(\s*\)", txt):
         issues.append("Contains empty parenthetical markers '()' created by citation stripping.")
@@ -3541,6 +3585,15 @@ def _essay_quality_issues(
     bare_case_count = 0
     case_counts: Counter[str] = Counter()
     case_display: Dict[str, str] = {}
+    inline_authority_spans = [
+        (match.start(), match.end())
+        for match in _INLINE_AUTHORITY_PAREN_RE.finditer(txt)
+        if _INLINE_AUTHORITY_SIGNAL_RE.search(match.group(0))
+    ]
+
+    def _inside_inline_authority_span(start: int, end: int) -> bool:
+        return any(span_start <= start and end <= span_end for span_start, span_end in inline_authority_spans)
+
     # Allow lowercase corporate suffixes/connectors inside case names
     # (for example "Axa ... plc v ... Ltd"), while still requiring case-like sides.
     case_pat = re.compile(
@@ -3548,6 +3601,8 @@ def _essay_quality_issues(
         r"([A-Z][A-Za-z0-9'’.\-]*(?:\s+[A-Za-z][A-Za-z0-9'’.\-]*){0,10})\b"
     )
     for m in case_pat.finditer(txt):
+        if _inside_inline_authority_span(m.start(), m.end()):
+            continue
         left = (m.group(1) or "").strip()
         right = (m.group(2) or "").strip()
         if not (_is_case_like_side(left) and _is_case_like_side(right)):
@@ -3587,13 +3642,7 @@ def _essay_quality_issues(
                 f"Over-relies on a single authority ({repeated_case_display.get(rep_key, rep_key)}) instead of using a balanced spread of sources."
             )
 
-    citation_count = len(
-        re.findall(
-            r"\([^()\n]{3,260}(?:\[[12]\d{3}\]|Act\s+\d{4}|Article\s+\d+(?:\(\d+\))?|section\s+\d+|s\.?\s*\d+)",
-            txt,
-            flags=re.IGNORECASE,
-        )
-    )
+    citation_count = sum(1 for _ in _iter_inline_authority_parentheticals(txt))
     actual_words_now = _count_words(txt)
     min_citations = 0
     if actual_words_now >= 1800:
@@ -3622,11 +3671,7 @@ def _essay_quality_issues(
         block = txt[block_start:block_end].strip()
         if _count_words(block) < 80:
             continue
-        if not re.search(
-            r"\([^()\n]{3,260}(?:\[[12]\d{3}\]|Act\s+\d{4}|Article\s+\d+(?:\(\d+\))?|section\s+\d+|s\.?\s*\d+)",
-            block,
-            flags=re.IGNORECASE,
-        ):
+        if not _has_inline_authority_parenthetical(block):
             analytical_part_without_citation = True
             break
     if analytical_part_without_citation:
@@ -3648,7 +3693,7 @@ def _essay_quality_issues(
         )
         if not has_anchor:
             continue
-        if not re.search(r"\([^()\n]{3,260}\)", s):
+        if not _has_inline_authority_parenthetical(s):
             missing_prop_cite += 1
             if missing_prop_cite >= 1:
                 issues.append("Multiple legal proposition sentences contain authority anchors without immediate OSCOLA parenthetical citations.")

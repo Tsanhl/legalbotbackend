@@ -2,10 +2,14 @@
 Regression checks for delivery-gate footnote style and cross-reference handling.
 """
 
+from copy import deepcopy
+
 from lxml import etree
 
+from legal_doc_tools.refine_docx_from_amended import _normalize_body_paragraph_properties_from_original
 from legal_doc_tools.validate_delivery_gates import (
     NS,
+    _body_paragraph_property_issues,
     _resolve_cross_reference_target,
     _same_text_local_style_matches,
 )
@@ -56,5 +60,42 @@ assert _resolve_cross_reference_target(
     case_reference_names_by_footnote=case_reference_names_by_footnote,
     current_footnote_id=8,
 ) == 4
+
+
+original_document = _parse(
+    f"""<w:document xmlns:w="{WORD_NS}">
+  <w:body>
+    <w:p>
+      <w:pPr><w:spacing w:line="360" w:lineRule="auto"/></w:pPr>
+      <w:r><w:t>Original paragraph.</w:t></w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+)
+amended_document = _parse(
+    f"""<w:document xmlns:w="{WORD_NS}">
+  <w:body>
+    <w:p>
+      <w:pPr><w:spacing w:line="480" w:lineRule="auto"/></w:pPr>
+      <w:r>
+        <w:rPr><w:highlight w:val="yellow"/></w:rPr>
+        <w:t>Amended paragraph.</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"""
+)
+
+issues = _body_paragraph_property_issues(original_document, amended_document)
+assert len(issues) == 1
+assert "paragraph properties diverge" in issues[0]
+
+restored_document = deepcopy(amended_document)
+assert _normalize_body_paragraph_properties_from_original(original_document, restored_document) == 1
+restored_para = restored_document.xpath("/w:document/w:body/w:p", namespaces=NS)[0]
+restored_spacing = restored_para.find("./w:pPr/w:spacing", namespaces=NS)
+assert restored_spacing is not None
+assert (restored_spacing.get(f"{{{WORD_NS}}}line") or "") == "360"
+assert _body_paragraph_property_issues(original_document, restored_document) == []
 
 print("Delivery-gate regression checks passed.")

@@ -116,7 +116,7 @@ except ImportError:
     )
 
 
-def _one_off_temp_dirs() -> set[Path]:
+def _task_artifact_temp_dirs() -> set[Path]:
     dirs = {
         Path("/tmp").resolve(),
         Path(tempfile.gettempdir()).resolve(),
@@ -128,7 +128,7 @@ def _one_off_temp_dirs() -> set[Path]:
     return dirs
 
 
-ONE_OFF_TEMP_DIRS = _one_off_temp_dirs()
+TEMP_TASK_ARTIFACT_DIRS = _task_artifact_temp_dirs()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.resolve()
 TRUTHY_REVIEW_VALUES = {"1", "true", "yes", "y", "done", "complete", "completed", "checked", "verified"}
 URL_IN_ANGLE_BRACKETS_RE = re.compile(r"<(https?://[^<>\s]+)>")
@@ -166,13 +166,13 @@ QUESTION_GUIDANCE_ALLOWED_STATUSES = {
     "not_needed",
 }
 
-COMMON_ONE_OFF_CLEANUP_CONFIG_KEYS: tuple[str, ...] = (
+COMMON_TASK_ARTIFACT_CLEANUP_CONFIG_KEYS: tuple[str, ...] = (
     "verification_ledger_path",
     "authority_verification_report_path",
     "sentence_support_report_path",
     "argumentative_sentence_support_report_path",
 )
-DOC_SPECIFIC_ONE_OFF_CLEANUP_CONFIG_KEYS: tuple[str, ...] = (
+LEGACY_DOC_SPECIFIC_TASK_ARTIFACT_CLEANUP_CONFIG_KEYS: tuple[str, ...] = (
     "one_off_instruction_path",
     "one_off_instruction_paths",
     "one_off_prompt_path",
@@ -186,7 +186,21 @@ DOC_SPECIFIC_ONE_OFF_CLEANUP_CONFIG_KEYS: tuple[str, ...] = (
     "one_off_helper_test_path",
     "one_off_helper_test_paths",
 )
-ONE_OFF_WORKSPACE_FILE_SUFFIXES: tuple[str, ...] = (
+DOC_SPECIFIC_TASK_ARTIFACT_CLEANUP_CONFIG_KEYS: tuple[str, ...] = (
+    "task_specific_instruction_path",
+    "task_specific_instruction_paths",
+    "task_specific_prompt_path",
+    "task_specific_prompt_paths",
+    "task_specific_helper_path",
+    "task_specific_helper_paths",
+    "task_specific_helper_code_path",
+    "task_specific_helper_code_paths",
+    "task_specific_test_path",
+    "task_specific_test_paths",
+    "task_specific_helper_test_path",
+    "task_specific_helper_test_paths",
+)
+TASK_ARTIFACT_WORKSPACE_FILE_SUFFIXES: tuple[str, ...] = (
     ".docx",
     ".doc",
     ".md",
@@ -196,9 +210,13 @@ ONE_OFF_WORKSPACE_FILE_SUFFIXES: tuple[str, ...] = (
     ".yml",
     ".py",
 )
-ONE_OFF_WORKSPACE_NAME_HINTS: tuple[str, ...] = (
+TASK_ARTIFACT_WORKSPACE_NAME_HINTS: tuple[str, ...] = (
     "one_off",
     "one-off",
+    "task_specific",
+    "task-specific",
+    "temporary",
+    "transient",
     "doc_specific",
     "doc-specific",
     "question",
@@ -465,19 +483,19 @@ def _path_is_within(path: Path, directory: Path) -> bool:
         return False
 
 
-def _is_one_off_artifact(path: Optional[Path]) -> bool:
+def _is_temp_task_artifact(path: Optional[Path]) -> bool:
     if path is None:
         return False
     resolved = path.expanduser().resolve()
-    return any(_path_is_within(resolved, temp_dir) for temp_dir in ONE_OFF_TEMP_DIRS)
+    return any(_path_is_within(resolved, temp_dir) for temp_dir in TEMP_TASK_ARTIFACT_DIRS)
 
 
-def _name_has_one_off_hint(path: Path) -> bool:
+def _name_has_task_artifact_hint(path: Path) -> bool:
     low = path.name.casefold()
-    return any(hint in low for hint in ONE_OFF_WORKSPACE_NAME_HINTS)
+    return any(hint in low for hint in TASK_ARTIFACT_WORKSPACE_NAME_HINTS)
 
 
-def _is_workspace_one_off_artifact(path: Optional[Path]) -> bool:
+def _is_workspace_task_artifact(path: Optional[Path]) -> bool:
     if path is None:
         return False
     resolved = path.expanduser().resolve()
@@ -487,20 +505,20 @@ def _is_workspace_one_off_artifact(path: Optional[Path]) -> bool:
     relevant_nodes = [resolved, *resolved.parents]
     if resolved.is_dir():
         return any(
-            node != PROJECT_ROOT and _path_is_within(node, PROJECT_ROOT) and _name_has_one_off_hint(node)
+            node != PROJECT_ROOT and _path_is_within(node, PROJECT_ROOT) and _name_has_task_artifact_hint(node)
             for node in relevant_nodes
         )
 
-    if resolved.suffix.lower() not in ONE_OFF_WORKSPACE_FILE_SUFFIXES:
+    if resolved.suffix.lower() not in TASK_ARTIFACT_WORKSPACE_FILE_SUFFIXES:
         return False
     return any(
-        node != PROJECT_ROOT and _path_is_within(node, PROJECT_ROOT) and _name_has_one_off_hint(node)
+        node != PROJECT_ROOT and _path_is_within(node, PROJECT_ROOT) and _name_has_task_artifact_hint(node)
         for node in relevant_nodes
     )
 
 
 def _is_cleanup_candidate(path: Optional[Path]) -> bool:
-    return _is_one_off_artifact(path) or _is_workspace_one_off_artifact(path)
+    return _is_temp_task_artifact(path) or _is_workspace_task_artifact(path)
 
 
 def _string_path_list(values: Any) -> list[Path]:
@@ -523,7 +541,7 @@ def _collect_cleanup_config_paths(config: dict[str, Any], *keys: str) -> list[Pa
     return paths
 
 
-def _cleanup_one_off_artifacts(paths: list[Path], *, protected_paths: Optional[list[Path]] = None) -> int:
+def _cleanup_task_artifacts(paths: list[Path], *, protected_paths: Optional[list[Path]] = None) -> int:
     seen: set[Path] = set()
     removed = 0
     protected_nodes = {
@@ -566,15 +584,16 @@ def _collect_registered_cleanup_targets(
     include_question_guidance_report: bool,
 ) -> list[Path]:
     cleanup_targets: list[Path] = []
-    cleanup_targets.extend(_collect_cleanup_config_paths(config, *COMMON_ONE_OFF_CLEANUP_CONFIG_KEYS))
+    cleanup_targets.extend(_collect_cleanup_config_paths(config, *COMMON_TASK_ARTIFACT_CLEANUP_CONFIG_KEYS))
+    cleanup_targets.extend(_collect_cleanup_config_paths(config, *DOC_SPECIFIC_TASK_ARTIFACT_CLEANUP_CONFIG_KEYS))
     if include_question_guidance_report:
         cleanup_targets.extend(_collect_cleanup_config_paths(config, "question_guidance_report_path"))
-    cleanup_targets.extend(_collect_cleanup_config_paths(config, *DOC_SPECIFIC_ONE_OFF_CLEANUP_CONFIG_KEYS))
+    cleanup_targets.extend(_collect_cleanup_config_paths(config, *LEGACY_DOC_SPECIFIC_TASK_ARTIFACT_CLEANUP_CONFIG_KEYS))
     cleanup_targets.extend(_string_path_list(config.get("cleanup_paths")))
     return cleanup_targets
 
 
-def _collect_one_off_cleanup_targets(
+def _collect_task_artifact_cleanup_targets(
     *,
     config: dict[str, Any],
     config_path: Path,
@@ -599,20 +618,20 @@ def _collect_one_off_cleanup_targets(
     return cleanup_targets
 
 
-def _collect_embedded_one_off_cleanup_targets(config: dict[str, Any]) -> list[Path]:
+def _collect_embedded_task_artifact_cleanup_targets(config: dict[str, Any]) -> list[Path]:
     return _collect_registered_cleanup_targets(
         config,
         include_question_guidance_report=True,
     )
 
 
-def _cleanup_embedded_one_off_artifacts(
+def _cleanup_embedded_task_artifacts(
     config: dict[str, Any],
     *,
     protected_paths: Optional[list[Path]] = None,
 ) -> int:
-    return _cleanup_one_off_artifacts(
-        _collect_embedded_one_off_cleanup_targets(config),
+    return _cleanup_task_artifacts(
+        _collect_embedded_task_artifact_cleanup_targets(config),
         protected_paths=protected_paths,
     )
 
@@ -1045,7 +1064,7 @@ def _validate_question_guidance_report(report_path: Path) -> None:
                 )
 
 
-def _cleanup_one_off_artifacts_after_amend(
+def _cleanup_task_artifacts_after_amend(
     *,
     config: dict[str, Any],
     config_path: Path,
@@ -1055,8 +1074,8 @@ def _cleanup_one_off_artifacts_after_amend(
     source_path: Optional[Path] = None,
     output_path: Optional[Path] = None,
 ) -> int:
-    return _cleanup_one_off_artifacts(
-        _collect_one_off_cleanup_targets(
+    return _cleanup_task_artifacts(
+        _collect_task_artifact_cleanup_targets(
             config=config,
             config_path=config_path,
             question_path=question_path,
@@ -1394,7 +1413,12 @@ def _clone_paragraph_for_insertion(template: etree._Element, text: str) -> etree
         paragraph.remove(child)
 
     context_run = _first_textual_run_in_paragraph(template)
-    new_children = _emit_changed_text(text, context_run, markup=True)
+    new_children = _emit_changed_text(
+        text,
+        context_run,
+        markup=True,
+        context_paragraph=template,
+    )
     _rewrite_paragraph_in_place(paragraph, new_children)
     return paragraph
 
@@ -1854,7 +1878,7 @@ def apply_amendments(
 
     _write_docx_with_replaced_parts(source, output, parts_to_write)
     _assert_markup_detectable(source, output, changed)
-    _cleanup_embedded_one_off_artifacts(
+    _cleanup_embedded_task_artifacts(
         config,
         protected_paths=[source, output],
     )
@@ -1929,7 +1953,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if temp_source_dir is not None:
             shutil.rmtree(temp_source_dir, ignore_errors=True)
 
-    removed_one_off_artifacts = _cleanup_one_off_artifacts_after_amend(
+    removed_task_artifacts = _cleanup_task_artifacts_after_amend(
         config=config,
         config_path=config_path,
         question_path=args.question_file.expanduser().resolve() if args.question_file is not None else None,
@@ -1941,7 +1965,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print(f"[amend] wrote {output}")
     print(f"[amend] changed items detected: {changed}")
-    print(f"[amend] one-off artifacts cleaned: {removed_one_off_artifacts}")
+    print(f"[amend] temporary task artifacts cleaned: {removed_task_artifacts}")
     return 0
 
 

@@ -1,5 +1,5 @@
 """
-Regression checks for one-off amend cleanup targets.
+Regression checks for temporary amend task-artifact cleanup targets.
 """
 
 import tempfile
@@ -7,9 +7,9 @@ from pathlib import Path
 
 import legal_doc_tools.amend_docx as amend_docx
 from legal_doc_tools.amend_docx import (
-    ONE_OFF_TEMP_DIRS,
-    _cleanup_one_off_artifacts_after_amend,
-    _collect_one_off_cleanup_targets,
+    TEMP_TASK_ARTIFACT_DIRS,
+    _cleanup_task_artifacts_after_amend,
+    _collect_task_artifact_cleanup_targets,
 )
 
 
@@ -41,18 +41,18 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     unrelated_readme.write_text("keep me", encoding="utf-8")
 
     config = {
-        "one_off_instruction_path": str(instruction_path),
-        "one_off_prompt_paths": [str(prompt_path)],
-        "one_off_helper_test_paths": [str(helper_test_path)],
-        "one_off_helper_code_paths": [str(helper_dir)],
+        "task_specific_instruction_path": str(instruction_path),
+        "task_specific_prompt_paths": [str(prompt_path)],
+        "task_specific_helper_test_paths": [str(helper_test_path)],
+        "task_specific_helper_code_paths": [str(helper_dir)],
         "cleanup_paths": [],
     }
 
-    original_one_off_dirs = set(ONE_OFF_TEMP_DIRS)
+    original_temp_dirs = set(TEMP_TASK_ARTIFACT_DIRS)
     original_project_root = amend_docx.PROJECT_ROOT
     try:
         amend_docx.PROJECT_ROOT = root
-        targets = _collect_one_off_cleanup_targets(
+        targets = _collect_task_artifact_cleanup_targets(
             config=config,
             config_path=config_path,
             question_path=question_path,
@@ -69,8 +69,8 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         assert rubric_path.expanduser().resolve() in target_set
         assert context_path.expanduser().resolve() in target_set
 
-        amend_docx.ONE_OFF_TEMP_DIRS = {root.parent / "unrelated-temp-root"}
-        removed = _cleanup_one_off_artifacts_after_amend(
+        amend_docx.TEMP_TASK_ARTIFACT_DIRS = {root.parent / "unrelated-temp-root"}
+        removed = _cleanup_task_artifacts_after_amend(
             config=config,
             config_path=config_path,
             question_path=question_path,
@@ -78,7 +78,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
             context_out_path=context_path,
         )
     finally:
-        amend_docx.ONE_OFF_TEMP_DIRS = original_one_off_dirs
+        amend_docx.TEMP_TASK_ARTIFACT_DIRS = original_temp_dirs
         amend_docx.PROJECT_ROOT = original_project_root
 
     assert removed >= 8
@@ -92,4 +92,4 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     assert not helper_dir.exists()
     assert unrelated_readme.exists()
 
-print("One-off cleanup regression passed.")
+print("Task-artifact cleanup regression passed.")

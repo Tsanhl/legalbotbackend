@@ -28,18 +28,21 @@ from legal_doc_tools.amend_docx import (
     _rewrite_body_paragraph_preserving_footnotes,
 )
 from legal_doc_tools.refine_docx_from_amended import (
+    DESKTOP_ROOT,
     _build_footnote_search_text_map,
+    _copy_source_to_temp_if_same_as_output,
     _footnote_reference_runs_with_positions,
     _iter_body_paragraphs,
     _load_docx_xml,
     _load_docx_xml_if_exists,
-    _normalize_bibliography_bold,
+    _normalize_to_final_output_path,
     _normalize_body_footnote_reference_positions,
     _normalize_body_footnote_reference_styles_from_original,
     _normalize_body_italics,
     _normalize_case_italics_in_footnotes,
     _normalize_footnote_styles_from_original,
     _paragraph_text_all_runs,
+    _require_desktop_root_output,
     _write_docx_with_replaced_parts,
     _assert_markup_detectable,
 )
@@ -413,171 +416,180 @@ def amend_large_docx(
     plan_dir: Optional[Path] = None,
 ) -> Path:
     source_path = source_path.expanduser().resolve()
-    output_path = output_path.expanduser().resolve()
-    if source_path == output_path:
-        raise ValueError(
-            "Output path must differ from source path. In-place amendment is blocked; write to a new DOCX path."
+    requested_output = output_path.expanduser().resolve()
+    output_path, normalized_output = _normalize_to_final_output_path(source_path, requested_output)
+    if normalized_output:
+        print(
+            f"Requested output path normalized to protected Desktop final DOCX: {output_path}",
+            flush=True,
         )
+    _require_desktop_root_output(output_path)
+    work_source, temp_source_dir = _copy_source_to_temp_if_same_as_output(source_path, output_path)
 
-    doc_root = _load_docx_xml(source_path, "word/document.xml")
-    doc_template = _load_docx_xml(source_path, "word/document.xml")
-    footnotes_root = _load_docx_xml_if_exists(source_path, "word/footnotes.xml")
-    footnotes_template = _load_docx_xml_if_exists(source_path, "word/footnotes.xml")
-    body_paragraphs = _iter_body_paragraphs(doc_root)
-    paragraph_texts = [_paragraph_text_all_runs(p) for p in body_paragraphs]
-    sections = _detect_sections(paragraph_texts)
-    if section_filter:
-        sections = [section for section in sections if section.name in section_filter]
-        if not sections:
-            raise ValueError(f"No sections matched filter: {sorted(section_filter)}")
+    try:
+        doc_root = _load_docx_xml(work_source, "word/document.xml")
+        doc_template = _load_docx_xml(work_source, "word/document.xml")
+        footnotes_root = _load_docx_xml_if_exists(work_source, "word/footnotes.xml")
+        footnotes_template = _load_docx_xml_if_exists(work_source, "word/footnotes.xml")
+        body_paragraphs = _iter_body_paragraphs(doc_root)
+        paragraph_texts = [_paragraph_text_all_runs(p) for p in body_paragraphs]
+        sections = _detect_sections(paragraph_texts)
+        if section_filter:
+            sections = [section for section in sections if section.name in section_filter]
+            if not sections:
+                raise ValueError(f"No sections matched filter: {sorted(section_filter)}")
 
-    print(
-        f"Detected sections: {', '.join(f'{section.name}[{section.display_range}]' for section in sections)}",
-        flush=True,
-    )
-    changed_paragraphs = 0
-    changed_footnotes = 0
-    corrected_footnote_ids: set[int] = set()
-
-    for section in sections:
-        section_paragraphs, section_texts, snapshot, frozen_indexes, original_words, _footnote_count = _snapshot_for_section(
-            source_path=source_path,
-            doc_root=doc_root,
-            footnotes_root=footnotes_root,
-            section=section,
+        print(
+            f"Detected sections: {', '.join(f'{section.name}[{section.display_range}]' for section in sections)}",
+            flush=True,
         )
-        allowed_drift = _allowed_word_drift(
-            original_words,
-            max_drift_pct=max_drift_pct,
-            max_drift_words=max_drift_words,
-        )
-        lower_bound = max(0, original_words - allowed_drift)
-        upper_bound = original_words + allowed_drift
+        changed_paragraphs = 0
+        changed_footnotes = 0
+        corrected_footnote_ids: set[int] = set()
 
-        request = _section_request(
-            section,
-            original_words=original_words,
-            lower_bound=lower_bound,
-            upper_bound=upper_bound,
-        )
-        amended_paragraphs: List[str] = []
-        amended_footnotes: Dict[int, str] = {}
-        summary = ""
-
-        if plan_dir is not None:
-            plan_path = _section_plan_path(plan_dir, section.name)
-            if not plan_path.exists():
-                raise FileNotFoundError(f"Missing plan file for {section.name}: {plan_path}")
-            amended_paragraphs, amended_footnotes, summary = _load_plan_from_file(
-                snapshot=snapshot,
-                plan_path=plan_path,
+        for section in sections:
+            section_paragraphs, section_texts, snapshot, frozen_indexes, original_words, _footnote_count = _snapshot_for_section(
+                source_path=source_path,
+                doc_root=doc_root,
+                footnotes_root=footnotes_root,
+                section=section,
             )
-            for idx in frozen_indexes:
-                amended_paragraphs[idx] = section_texts[idx]
-            amended_words = _word_count(amended_paragraphs)
-            if not (lower_bound <= amended_words <= upper_bound):
-                raise ValueError(
-                    f"Section {section.name} drifted too far from the original length: "
-                    f"{original_words} -> {amended_words} words."
-                )
-        else:
-            if not api_key or not provider:
-                raise ValueError(
-                    "Provider-backed generation requires api_key/provider, or supply --plan-dir for Codex/local plan application."
-                )
-            for attempt in range(2):
-                attempt_request = request
-                if attempt == 1:
-                    attempt_request += (
-                        f" Second attempt: your first draft drifted too far from the original length. "
-                        f"Stay within {lower_bound}-{upper_bound} words and do not add filler."
-                    )
+            allowed_drift = _allowed_word_drift(
+                original_words,
+                max_drift_pct=max_drift_pct,
+                max_drift_words=max_drift_words,
+            )
+            lower_bound = max(0, original_words - allowed_drift)
+            upper_bound = original_words + allowed_drift
 
-                amended_paragraphs, amended_footnotes, summary = _call_structured_amend(
-                    api_key=api_key,
-                    provider=provider,
-                    model_name=model_name,
+            request = _section_request(
+                section,
+                original_words=original_words,
+                lower_bound=lower_bound,
+                upper_bound=upper_bound,
+            )
+            amended_paragraphs: List[str] = []
+            amended_footnotes: Dict[int, str] = {}
+            summary = ""
+
+            if plan_dir is not None:
+                plan_path = _section_plan_path(plan_dir, section.name)
+                if not plan_path.exists():
+                    raise FileNotFoundError(f"Missing plan file for {section.name}: {plan_path}")
+                amended_paragraphs, amended_footnotes, summary = _load_plan_from_file(
                     snapshot=snapshot,
-                    user_request=attempt_request,
-                    project_id=f"codex::{source_path.stem}::{section.name}::attempt_{attempt + 1}",
+                    plan_path=plan_path,
                 )
                 for idx in frozen_indexes:
                     amended_paragraphs[idx] = section_texts[idx]
-
                 amended_words = _word_count(amended_paragraphs)
-                if lower_bound <= amended_words <= upper_bound:
-                    break
-                if attempt == 1:
+                if not (lower_bound <= amended_words <= upper_bound):
                     raise ValueError(
                         f"Section {section.name} drifted too far from the original length: "
                         f"{original_words} -> {amended_words} words."
                     )
+            else:
+                if not api_key or not provider:
+                    raise ValueError(
+                        "Provider-backed generation requires api_key/provider, or supply --plan-dir for Codex/local plan application."
+                    )
+                for attempt in range(2):
+                    attempt_request = request
+                    if attempt == 1:
+                        attempt_request += (
+                            f" Second attempt: your first draft drifted too far from the original length. "
+                            f"Stay within {lower_bound}-{upper_bound} words and do not add filler."
+                        )
 
-        section_changed_paragraphs = 0
-        for paragraph, new_text in zip(section_paragraphs, amended_paragraphs):
-            if new_text != _paragraph_text_all_runs(paragraph):
-                if _rewrite_body_paragraph_preserving_footnotes(paragraph, new_text):
-                    changed_paragraphs += 1
-                    section_changed_paragraphs += 1
+                    amended_paragraphs, amended_footnotes, summary = _call_structured_amend(
+                        api_key=api_key,
+                        provider=provider,
+                        model_name=model_name,
+                        snapshot=snapshot,
+                        user_request=attempt_request,
+                        project_id=f"codex::{source_path.stem}::{section.name}::attempt_{attempt + 1}",
+                    )
+                    for idx in frozen_indexes:
+                        amended_paragraphs[idx] = section_texts[idx]
 
-        section_changed_footnotes = 0
+                    amended_words = _word_count(amended_paragraphs)
+                    if lower_bound <= amended_words <= upper_bound:
+                        break
+                    if attempt == 1:
+                        raise ValueError(
+                            f"Section {section.name} drifted too far from the original length: "
+                            f"{original_words} -> {amended_words} words."
+                        )
+
+            section_changed_paragraphs = 0
+            for paragraph, new_text in zip(section_paragraphs, amended_paragraphs):
+                if new_text != _paragraph_text_all_runs(paragraph):
+                    if _rewrite_body_paragraph_preserving_footnotes(paragraph, new_text):
+                        changed_paragraphs += 1
+                        section_changed_paragraphs += 1
+
+            section_changed_footnotes = 0
+            if footnotes_root is not None:
+                current_footnotes = _build_footnote_search_text_map(footnotes_root)
+                for footnote_id, new_text in amended_footnotes.items():
+                    if current_footnotes.get(footnote_id, "") != new_text:
+                        if _replace_existing_footnote_text(
+                            footnotes_root,
+                            footnote_id=footnote_id,
+                            new_text=new_text,
+                        ):
+                            corrected_footnote_ids.add(footnote_id)
+                            changed_footnotes += 1
+                            section_changed_footnotes += 1
+
+            print(
+                f"{section.name}: words {original_words}->{_word_count(amended_paragraphs)}, "
+                f"paragraphs changed {section_changed_paragraphs}, footnotes changed {section_changed_footnotes}, "
+                f"summary={summary}",
+                flush=True,
+            )
+
         if footnotes_root is not None:
-            current_footnotes = _build_footnote_search_text_map(footnotes_root)
-            for footnote_id, new_text in amended_footnotes.items():
-                if current_footnotes.get(footnote_id, "") != new_text:
-                    if _replace_existing_footnote_text(
-                        footnotes_root,
-                        footnote_id=footnote_id,
-                        new_text=new_text,
-                    ):
-                        corrected_footnote_ids.add(footnote_id)
-                        changed_footnotes += 1
-                        section_changed_footnotes += 1
+            italicized_footnotes = _normalize_case_italics_in_footnotes(footnotes_root)
+            if footnotes_template is not None and (changed_footnotes > 0 or italicized_footnotes > 0):
+                _normalize_footnote_styles_from_original(footnotes_template, footnotes_root)
 
-        print(
-            f"{section.name}: words {original_words}->{_word_count(amended_paragraphs)}, "
-            f"paragraphs changed {section_changed_paragraphs}, footnotes changed {section_changed_footnotes}, "
-            f"summary={summary}",
-            flush=True,
+        _normalize_body_footnote_reference_styles_from_original(doc_template, doc_root)
+        _normalize_body_footnote_reference_positions(doc_root, footnotes_root)
+        _normalize_body_italics(doc_root, footnotes_root)
+
+        _assert_original_footnotes_preserved_if_relevant(
+            original_doc_root=doc_template,
+            amended_doc_root=doc_root,
+            original_footnotes_root=footnotes_template,
+            amended_footnotes_root=footnotes_root,
+            explicitly_corrected_ids=corrected_footnote_ids,
         )
 
-    if footnotes_root is not None:
-        italicized_footnotes = _normalize_case_italics_in_footnotes(footnotes_root)
-        if footnotes_template is not None and (changed_footnotes > 0 or italicized_footnotes > 0):
-            _normalize_footnote_styles_from_original(footnotes_template, footnotes_root)
+        parts_to_write = {"word/document.xml": doc_root}
+        if footnotes_root is not None:
+            parts_to_write["word/footnotes.xml"] = footnotes_root
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_docx_with_replaced_parts(work_source, output_path, parts_to_write)
+        _assert_markup_detectable(work_source, output_path, changed_paragraphs + changed_footnotes)
 
-    _normalize_body_footnote_reference_styles_from_original(doc_template, doc_root)
-    _normalize_body_footnote_reference_positions(doc_root, footnotes_root)
-    _normalize_body_italics(doc_root, footnotes_root)
-    _normalize_bibliography_bold(doc_root)
+        oscola_issues = _validate_docx(output_path)
+        if oscola_issues:
+            joined = "; ".join(oscola_issues[:10])
+            raise ValueError(f"Final OSCOLA validation failed: {joined}")
+        if changed_paragraphs + changed_footnotes <= 0:
+            raise ValueError("No detectable amendments were generated.")
 
-    _assert_original_footnotes_preserved_if_relevant(
-        original_doc_root=doc_template,
-        amended_doc_root=doc_root,
-        original_footnotes_root=footnotes_template,
-        amended_footnotes_root=footnotes_root,
-        explicitly_corrected_ids=corrected_footnote_ids,
-    )
+        print(
+            f"Completed: changed_paragraphs={changed_paragraphs} changed_footnotes={changed_footnotes} output={output_path}",
+            flush=True,
+        )
+        return output_path
+    finally:
+        if temp_source_dir is not None:
+            import shutil
 
-    parts_to_write = {"word/document.xml": doc_root}
-    if footnotes_root is not None:
-        parts_to_write["word/footnotes.xml"] = footnotes_root
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_docx_with_replaced_parts(source_path, output_path, parts_to_write)
-    _assert_markup_detectable(source_path, output_path, changed_paragraphs + changed_footnotes)
-
-    oscola_issues = _validate_docx(output_path)
-    if oscola_issues:
-        joined = "; ".join(oscola_issues[:10])
-        raise ValueError(f"Final OSCOLA validation failed: {joined}")
-    if changed_paragraphs + changed_footnotes <= 0:
-        raise ValueError("No detectable amendments were generated.")
-
-    print(
-        f"Completed: changed_paragraphs={changed_paragraphs} changed_footnotes={changed_footnotes} output={output_path}",
-        flush=True,
-    )
-    return output_path
+            shutil.rmtree(temp_source_dir, ignore_errors=True)
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -587,7 +599,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--output",
         type=Path,
         default=None,
-        help="Where to write the amended DOCX (default: /tmp/<stem>_amended_marked_final.docx)",
+        help=(
+            "Requested amended DOCX path. The tool always normalizes to a protected Desktop final path "
+            "for the source (<stem>_amended_marked_final.docx, then _v2, _v3, etc. if needed). "
+            "The original source DOCX is never overwritten."
+        ),
     )
     parser.add_argument("--provider", default="gemini")
     parser.add_argument("--model-name", default=None)
@@ -625,7 +641,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     output_path = (
         args.output.expanduser().resolve()
         if args.output is not None
-        else Path("/tmp") / f"{source_path.stem}_amended_marked_final.docx"
+        else DESKTOP_ROOT / f"{source_path.stem}_amended_marked_final.docx"
     )
     section_filter = None
     if args.sections:

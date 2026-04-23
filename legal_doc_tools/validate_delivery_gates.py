@@ -1586,6 +1586,15 @@ def _run_has_yellow_highlight(run: etree._Element) -> bool:
     return (highlight.get(f"{{{W_NS}}}val") or "").strip().lower() == "yellow"
 
 
+def _paragraph_has_yellow_highlighted_text(paragraph: etree._Element) -> bool:
+    for run in paragraph.xpath(".//w:r", namespaces=NS):
+        if not run.xpath("./w:t|./w:tab|./w:br|./w:noBreakHyphen|./w:softHyphen", namespaces=NS):
+            continue
+        if _run_has_yellow_highlight(run):
+            return True
+    return False
+
+
 def _paragraph_text_and_run_spans(
     paragraph: etree._Element,
 ) -> tuple[str, list[tuple[etree._Element, int, int]]]:
@@ -1771,6 +1780,35 @@ def _validate_markup_hard_rule(original_docx: Path, amended_docx: Path) -> tuple
                     )
 
     return checked_runs, issues
+
+
+def _body_paragraph_property_issues(
+    original_root: etree._Element | None,
+    amended_root: etree._Element | None,
+) -> list[str]:
+    if original_root is None or amended_root is None:
+        return []
+
+    original_paragraphs = _paragraphs_for_markup_validation(original_root, "word/document.xml")
+    amended_paragraphs = _paragraphs_for_markup_validation(amended_root, "word/document.xml")
+    if len(original_paragraphs) != len(amended_paragraphs):
+        return []
+
+    issues: list[str] = []
+    for index, (original_para, amended_para) in enumerate(zip(original_paragraphs, amended_paragraphs), start=1):
+        original_text, _ = _paragraph_text_and_run_spans(original_para)
+        amended_text, _ = _paragraph_text_and_run_spans(amended_para)
+        if original_text == amended_text and not _paragraph_has_yellow_highlighted_text(amended_para):
+            continue
+        if _canonical_xml_fragment(original_para.find("./w:pPr", namespaces=NS)) == _canonical_xml_fragment(
+            amended_para.find("./w:pPr", namespaces=NS)
+        ):
+            continue
+        issues.append(
+            f"Document paragraph {index} paragraph properties diverge from the original "
+            "(style/spacing/alignment/indents)."
+        )
+    return issues
 
 
 def _count_yellow_highlight_runs(docx_path: Path) -> int:
@@ -2723,6 +2761,11 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 for issue in markup_issues:
                     errors.append(f"Markup hard-rule violation: {issue}")
+
+                original_document_root = _read_xml_part(original, "word/document.xml")
+                amended_document_root = _read_xml_part(amended, "word/document.xml")
+                for issue in _body_paragraph_property_issues(original_document_root, amended_document_root):
+                    errors.append(f"Body paragraph style parity failed: {issue}")
 
     # Gate 4: bibliography/reference coverage for amend modes.
     if mode in {"review+amend", "amend"} and original is not None and original.exists():

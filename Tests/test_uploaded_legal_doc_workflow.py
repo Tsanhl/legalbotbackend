@@ -101,6 +101,7 @@ assert wants_legal_doc_amend("Please review this generally.", docx_documents) is
 assert wants_legal_doc_amend("Please check and polish this uploaded docx.", docx_documents) is True
 assert wants_legal_doc_amend("use the code and rag amend this docx", docx_documents) is True
 assert wants_legal_doc_amend("use the code and rag amedn this docx", docx_documents) is True
+assert wants_legal_doc_amend("Please based on code guide amend this uploaded docx.", docx_documents) is True
 
 query_context = _build_uploaded_material_query_context(materials, max_total_chars=4000)
 assert "Uploaded docx: draft.docx" in query_context
@@ -141,6 +142,8 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     assert "final amend delivery is one protected amended DOCX saved directly in Desktop root." in amend_prompt
     assert "amend quality target is a genuine 90+ / 10/10 standard" in amend_prompt
     assert "apply marker-feedback discipline on structure and clarity" in amend_prompt
+    assert "learn reviewer/user feedback at rule level" in amend_prompt
+    assert "keep only the abstract lesson rather than document-specific confidential content" in amend_prompt
     assert "do not mention excluded limbs or irrelevant scope limits unless they genuinely orient the answer" in amend_prompt
     assert "\"that structure\", \"this approach\", \"that rule\"" in amend_prompt
     assert "\"that obligation-based structure\" rather than \"that structure\"" in amend_prompt
@@ -149,6 +152,18 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     assert "if a marker flags repetition, remove the earlier or weaker instance" in amend_prompt
     assert "do not use loose jurisdictional qualifiers such as \"particularly in the UK context\"" in amend_prompt
     assert "prefer fact-matched labels, for example \"consumer choice\"" in amend_prompt
+    assert "\"Compared with what?\", \"From what?\", \"Harmed how?\", \"With what effect?\"" in amend_prompt
+    assert "quantify or calibrate comparative and superlative claims" in amend_prompt
+    assert "use measured register; avoid loaded adjectives such as \"catastrophic\", \"devastating\", or \"seismic\"" in amend_prompt
+    assert "define acronyms and specialist shorthands on first use" in amend_prompt
+    assert "keep the summary within the true scope of the underlying material" in amend_prompt
+    assert "give the relevant comparator figures where available" in amend_prompt
+    assert "add a short orienting explanation of why it matters" in amend_prompt
+    assert "address that parity objection expressly" in amend_prompt
+    assert "if you use a distinctive label or coined term, define it on first use" in amend_prompt
+    assert "do not create a separate subheading or micro-section for a point that has only one thin paragraph" in amend_prompt
+    assert "tie it back to the main thesis and earlier doctrinal gaps" in amend_prompt
+    assert "replace shorthand with explicit doctrine, comparator, mechanism, actor, and consequence" in amend_prompt
     assert "locate dominance and abuse in the undertaking, not the product" in amend_prompt
     assert "do not over-plead self-preferencing or discrimination" in amend_prompt
     assert "keep OSCOLA bibliography format separate from OSCOLA footnote format" in amend_prompt
@@ -158,6 +173,8 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     assert "\"sentence_support_report\"" in amend_prompt
     assert "\"question_guidance_report\"" in amend_prompt
     assert "\"comment_coverage\"" in amend_prompt
+    assert "abstract each comment into a reusable drafting/control rule" in amend_prompt
+    assert "do not persist document-specific facts, names, quotations, or authority strings as reusable defaults" in amend_prompt
 
     harvard_amend_prompt = _build_structured_amend_prompt(
         "Please amend this using Harvard referencing and keep my style.",

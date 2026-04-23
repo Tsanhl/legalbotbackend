@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import math
 import re
 import shutil
 import sys
@@ -618,6 +619,68 @@ def _run_rPr(run: etree._Element) -> Optional[etree._Element]:
     return run.find("w:rPr", namespaces=NS)
 
 
+def _has_effective_bold(rPr: Optional[etree._Element]) -> bool:
+    if rPr is None:
+        return False
+    explicit_false = False
+    for tag in ("b", "bCs"):
+        bold = rPr.find(f"w:{tag}", namespaces=NS)
+        if bold is None:
+            continue
+        val = (bold.get(w_tag("val")) or "").strip().lower()
+        if val in {"0", "false", "off", "no"}:
+            explicit_false = True
+            continue
+        return True
+    if explicit_false:
+        return False
+    r_style = rPr.find("w:rStyle", namespaces=NS)
+    if r_style is not None:
+        style_name = (r_style.get(w_tag("val")) or "").strip().casefold()
+        if "strong" in style_name:
+            return True
+    return False
+
+
+def _ancestor_paragraph(node: Optional[etree._Element]) -> Optional[etree._Element]:
+    current = node
+    while current is not None:
+        if current.tag == w_tag("p"):
+            return current
+        current = current.getparent()
+    return None
+
+
+def _paragraph_default_run_rpr(paragraph: Optional[etree._Element]) -> Optional[etree._Element]:
+    if paragraph is None:
+        return None
+    pPr = paragraph.find("w:pPr", namespaces=NS)
+    if pPr is None:
+        return None
+    return pPr.find("w:rPr", namespaces=NS)
+
+
+def _merge_missing_rpr_children(
+    target_rPr: etree._Element,
+    source_rPr: Optional[etree._Element],
+    *,
+    skip_tags: tuple[str, ...] = (),
+) -> bool:
+    if source_rPr is None:
+        return False
+    changed = False
+    skip = set(skip_tags)
+    for child in source_rPr:
+        local_name = etree.QName(child).localname
+        if local_name in skip:
+            continue
+        if target_rPr.find(f"w:{local_name}", namespaces=NS) is not None:
+            continue
+        target_rPr.append(deepcopy(child))
+        changed = True
+    return changed
+
+
 def _clone_run_with_rPr(src_run: Optional[etree._Element]) -> etree._Element:
     r = etree.Element(w_tag("r"))
     if src_run is not None:
@@ -629,7 +692,12 @@ def _clone_run_with_rPr(src_run: Optional[etree._Element]) -> etree._Element:
     return r
 
 
-def _clone_run_for_changed_text(context_run: Optional[etree._Element], *, markup: bool) -> etree._Element:
+def _clone_run_for_changed_text(
+    context_run: Optional[etree._Element],
+    *,
+    markup: bool,
+    context_paragraph: Optional[etree._Element] = None,
+) -> etree._Element:
     r = _clone_run_with_rPr(context_run)
     if not markup:
         return r
@@ -637,10 +705,21 @@ def _clone_run_for_changed_text(context_run: Optional[etree._Element], *, markup
     if rPr is None:
         rPr = etree.Element(w_tag("rPr"))
         r.insert(0, rPr)
-    # Prevent accidental italic carry-over for normal amended wording.
-    for tag in ("i", "iCs"):
-        for node in rPr.findall(f"w:{tag}", namespaces=NS):
-            rPr.remove(node)
+    context_rPr = _run_rPr(context_run) if context_run is not None else None
+    context_has_bold = _has_effective_bold(context_rPr)
+    context_has_italic = _has_effective_italic(context_rPr)
+    paragraph = context_paragraph if context_paragraph is not None else _ancestor_paragraph(context_run)
+    # Backfill missing direct run typography from the paragraph's default run
+    # properties so repeated amend insertions do not drift onto fallback fonts.
+    _merge_missing_rpr_children(rPr, _paragraph_default_run_rpr(paragraph), skip_tags=("highlight",))
+    # Amendment markup must not invent bold/italic from paragraph defaults or
+    # generic template inheritance. Preserve direct local user emphasis from the
+    # context run, but explicitly neutralize inherited bold/italic where the
+    # source run itself was plain.
+    if not context_has_bold:
+        _clear_bold(rPr, force_explicit_false=True)
+    if not context_has_italic:
+        _clear_italic(rPr, force_explicit_false=True)
     _set_yellow_highlight_markup(rPr)
     return r
 
@@ -742,21 +821,46 @@ def _apply_full_replace_to_paragraph(
     old_text = _paragraph_text_all_runs(p)
     if old_text == new_text:
         return False
-    atoms: List[Atom] = []
-    atom_text = ""
-    old_italic_rpr_spans: List[Tuple[int, int, etree._Element]] = []
+    old_italic_spans: List[Tuple[int, int]] = []
+    old_run_rpr_spans: List[Tuple[int, int, etree._Element]] = []
     if preserve_projected_inline_italics:
-        atoms, atom_text = _paragraph_atoms(p)
-        old_italic_rpr_spans = _existing_italic_rpr_spans_from_atoms(atoms)
+        existing_run_segments = _paragraph_text_run_segments_all_runs(p)
+        old_italic_spans = _existing_italic_spans(existing_run_segments)
+        old_run_rpr_spans = _existing_run_rpr_spans(existing_run_segments, include_empty=True)
     context_run = _first_textual_run_in_paragraph(p)
-    new_children = _emit_changed_text(new_text, context_run, markup=markup)
+    new_children = _emit_changed_text(new_text, context_run, markup=markup, context_paragraph=p)
     _rewrite_paragraph_in_place(p, new_children)
-    if preserve_projected_inline_italics and old_italic_rpr_spans:
+    if preserve_projected_inline_italics and old_run_rpr_spans:
+        projected_rpr_spans = _project_preserved_rpr_spans(
+            old_text,
+            new_text,
+            old_run_rpr_spans,
+            preserve_changed_text=True,
+        )
+        if projected_rpr_spans:
+            _apply_rpr_spans_to_runs(
+                p,
+                projected_rpr_spans,
+                preserve_current_markup=True,
+            )
+        unchanged_rpr_spans = _project_preserved_rpr_spans(
+            old_text,
+            new_text,
+            old_run_rpr_spans,
+            preserve_changed_text=False,
+        )
+        if unchanged_rpr_spans:
+            _apply_rpr_spans_to_runs(
+                p,
+                unchanged_rpr_spans,
+                preserve_current_markup=False,
+            )
+    if preserve_projected_inline_italics and old_italic_spans:
         _restore_projected_inline_italic_styles(
             p,
-            old_text=atom_text,
+            old_text=old_text,
             new_text=new_text,
-            old_italic_rpr_spans=old_italic_rpr_spans,
+            old_italic_spans=old_italic_spans,
         )
     _clear_orphaned_non_alnum_italic_runs(p)
     return True
@@ -772,7 +876,7 @@ class Atom:
     text: str = ""
 
 
-def _existing_italic_rpr_spans_from_atoms(
+def _existing_run_rpr_spans_from_atoms(
     atoms: List[Atom],
 ) -> List[Tuple[int, int, etree._Element]]:
     spans: List[Tuple[int, int, etree._Element]] = []
@@ -780,10 +884,34 @@ def _existing_italic_rpr_spans_from_atoms(
         if atom.run is None or atom.start >= atom.end or atom.kind not in {"text", "tab", "br"}:
             continue
         rPr = atom.run.find("w:rPr", namespaces=NS)
-        if rPr is None or not _has_effective_italic(rPr):
+        if rPr is None:
             continue
         spans.append((atom.start, atom.end, deepcopy(rPr)))
     return spans
+
+
+def _existing_italic_rpr_spans_from_atoms(
+    atoms: List[Atom],
+) -> List[Tuple[int, int, etree._Element]]:
+    return [
+        (start, end, deepcopy(rPr))
+        for start, end, rPr in _existing_run_rpr_spans_from_atoms(atoms)
+        if _has_effective_italic(rPr)
+    ]
+
+
+def _existing_italic_spans_from_atoms(
+    atoms: List[Atom],
+) -> List[Tuple[int, int]]:
+    spans: List[Tuple[int, int]] = []
+    for atom in atoms:
+        if atom.run is None or atom.start >= atom.end or atom.kind not in {"text", "tab", "br"}:
+            continue
+        rPr = atom.run.find("w:rPr", namespaces=NS)
+        if rPr is None or not _has_effective_italic(rPr):
+            continue
+        spans.append((atom.start, atom.end))
+    return _merge_spans(spans)
 
 
 def _restore_projected_inline_italic_styles(
@@ -791,19 +919,19 @@ def _restore_projected_inline_italic_styles(
     *,
     old_text: str,
     new_text: str,
-    old_italic_rpr_spans: List[Tuple[int, int, etree._Element]],
+    old_italic_spans: List[Tuple[int, int]],
 ) -> int:
-    if not old_text or not new_text or not old_italic_rpr_spans:
+    if not old_text or not new_text or not old_italic_spans:
         return 0
-    projected_rpr_spans = _project_preserved_rpr_spans(
+    projected_spans = _project_preserved_italic_spans(
         old_text,
         new_text,
-        old_italic_rpr_spans,
-        preserve_changed_text=False,
+        old_italic_spans,
+        preserve_changed_text=True,
     )
-    if not projected_rpr_spans:
+    if not projected_spans:
         return 0
-    return _apply_rpr_spans_to_runs(p, projected_rpr_spans)
+    return _apply_italic_spans_to_runs(p, projected_spans, additive_only=True)
 
 
 def _clear_orphaned_non_alnum_italic_runs(p: etree._Element) -> int:
@@ -932,7 +1060,13 @@ def _emit_atom(atom: Atom, *, text_override: Optional[str] = None) -> etree._Ele
     return run
 
 
-def _emit_changed_text(text: str, context_run: Optional[etree._Element], *, markup: bool) -> List[etree._Element]:
+def _emit_changed_text(
+    text: str,
+    context_run: Optional[etree._Element],
+    *,
+    markup: bool,
+    context_paragraph: Optional[etree._Element] = None,
+) -> List[etree._Element]:
     out: List[etree._Element] = []
     if not text:
         return out
@@ -942,25 +1076,41 @@ def _emit_changed_text(text: str, context_run: Optional[etree._Element], *, mark
     while i < len(text):
         ch = text[i]
         if ch == "\t":
-            r = _clone_run_for_changed_text(context_run, markup=markup)
+            r = _clone_run_for_changed_text(
+                context_run,
+                markup=markup,
+                context_paragraph=context_paragraph,
+            )
             r.append(etree.Element(w_tag("tab")))
             out.append(r)
             i += 1
             continue
         if ch == "\n":
-            r = _clone_run_for_changed_text(context_run, markup=markup)
+            r = _clone_run_for_changed_text(
+                context_run,
+                markup=markup,
+                context_paragraph=context_paragraph,
+            )
             r.append(etree.Element(w_tag("br")))
             out.append(r)
             i += 1
             continue
         if ch == "\u2011":
-            r = _clone_run_for_changed_text(context_run, markup=markup)
+            r = _clone_run_for_changed_text(
+                context_run,
+                markup=markup,
+                context_paragraph=context_paragraph,
+            )
             r.append(etree.Element(w_tag("noBreakHyphen")))
             out.append(r)
             i += 1
             continue
         if ch == "\u00ad":
-            r = _clone_run_for_changed_text(context_run, markup=markup)
+            r = _clone_run_for_changed_text(
+                context_run,
+                markup=markup,
+                context_paragraph=context_paragraph,
+            )
             r.append(etree.Element(w_tag("softHyphen")))
             out.append(r)
             i += 1
@@ -970,7 +1120,11 @@ def _emit_changed_text(text: str, context_run: Optional[etree._Element], *, mark
         while j < len(text) and text[j] not in ("\t", "\n", "\u2011", "\u00ad"):
             j += 1
         chunk = text[i:j]
-        r = _clone_run_for_changed_text(context_run, markup=markup)
+        r = _clone_run_for_changed_text(
+            context_run,
+            markup=markup,
+            context_paragraph=context_paragraph,
+        )
         r.append(_t(chunk))
         out.append(r)
         i = j
@@ -1003,9 +1157,8 @@ def _apply_diff_to_paragraph(
     atoms, old_text = _paragraph_atoms(p)
     if old_text == new_text:
         return False
-    old_italic_rpr_spans = (
-        _existing_italic_rpr_spans_from_atoms(atoms) if preserve_projected_inline_italics else []
-    )
+    old_italic_spans = _existing_italic_spans_from_atoms(atoms) if preserve_projected_inline_italics else []
+    old_run_rpr_spans = _existing_run_rpr_spans_from_atoms(atoms) if preserve_projected_inline_italics else []
 
     old_tokens = _tokenize(old_text)
     new_tokens = _tokenize(new_text)
@@ -1083,19 +1236,39 @@ def _apply_diff_to_paragraph(
         inserted = new_text[n_start:n_end]
 
         if tag in ("replace", "insert"):
-            new_children.extend(_emit_changed_text(inserted, context_run, markup=markup))
+            new_children.extend(
+                _emit_changed_text(
+                    inserted,
+                    context_run,
+                    markup=markup,
+                    context_paragraph=p,
+                )
+            )
 
         # Preserve anchored elements that were in the replaced/deleted old range (not its old text).
         if tag in ("replace", "delete"):
             new_children.extend(emit_old_segment(o_start, o_end, include_text=False))
 
     _rewrite_paragraph_in_place(p, new_children)
-    if preserve_projected_inline_italics and old_italic_rpr_spans:
+    if preserve_projected_inline_italics and old_run_rpr_spans:
+        projected_rpr_spans = _project_preserved_rpr_spans(
+            old_text,
+            new_text,
+            old_run_rpr_spans,
+            preserve_changed_text=True,
+        )
+        if projected_rpr_spans:
+            _apply_rpr_spans_to_runs(
+                p,
+                projected_rpr_spans,
+                preserve_current_markup=True,
+            )
+    if preserve_projected_inline_italics and old_italic_spans:
         _restore_projected_inline_italic_styles(
             p,
             old_text=old_text,
             new_text=new_text,
-            old_italic_rpr_spans=old_italic_rpr_spans,
+            old_italic_spans=old_italic_spans,
         )
     _clear_orphaned_non_alnum_italic_runs(p)
     return True
@@ -1779,17 +1952,33 @@ def _set_bold(rPr: etree._Element) -> None:
     bold_cs.set(w_tag("val"), "1")
 
 
-def _clear_bold(rPr: etree._Element) -> int:
+def _clear_bold(rPr: etree._Element, *, force_explicit_false: bool = False) -> int:
     changed = 0
     for tag in ("b", "bCs"):
         bold = rPr.find(f"w:{tag}", namespaces=NS)
         if bold is not None:
             rPr.remove(bold)
             changed += 1
+    r_style = rPr.find("w:rStyle", namespaces=NS)
+    if force_explicit_false or r_style is not None:
+        style_name = ""
+        if r_style is not None:
+            style_name = (r_style.get(w_tag("val")) or "").strip().casefold()
+        if force_explicit_false or "strong" in style_name:
+            for tag in ("b", "bCs"):
+                bold = rPr.find(f"w:{tag}", namespaces=NS)
+                if bold is None:
+                    bold = etree.Element(w_tag(tag))
+                    rPr.append(bold)
+                    changed += 1
+                current_val = (bold.get(w_tag("val")) or "").strip().lower()
+                if current_val not in {"0", "false", "off", "no"}:
+                    bold.set(w_tag("val"), "0")
+                    changed += 1
     return changed
 
 
-def _clear_italic(rPr: etree._Element) -> int:
+def _clear_italic(rPr: etree._Element, *, force_explicit_false: bool = False) -> int:
     changed = 0
     for tag in ("i", "iCs"):
         italic = rPr.find(f"w:{tag}", namespaces=NS)
@@ -1797,9 +1986,11 @@ def _clear_italic(rPr: etree._Element) -> int:
             rPr.remove(italic)
             changed += 1
     r_style = rPr.find("w:rStyle", namespaces=NS)
-    if r_style is not None:
-        style_name = (r_style.get(w_tag("val")) or "").strip().casefold()
-        if "emphasis" in style_name:
+    if force_explicit_false or r_style is not None:
+        style_name = ""
+        if r_style is not None:
+            style_name = (r_style.get(w_tag("val")) or "").strip().casefold()
+        if force_explicit_false or "emphasis" in style_name:
             for tag in ("i", "iCs"):
                 italic = rPr.find(f"w:{tag}", namespaces=NS)
                 if italic is None:
@@ -2598,6 +2789,24 @@ def _existing_italic_rpr_spans(
     return spans
 
 
+def _existing_run_rpr_spans(
+    run_segments: List[Tuple[etree._Element, int, int, str]],
+    *,
+    include_empty: bool = False,
+) -> List[Tuple[int, int, etree._Element]]:
+    spans: List[Tuple[int, int, etree._Element]] = []
+    for run, start, end, _run_text in run_segments:
+        if start >= end:
+            continue
+        rPr = run.find("w:rPr", namespaces=NS)
+        if rPr is None:
+            if not include_empty:
+                continue
+            rPr = etree.Element(w_tag("rPr"))
+        spans.append((start, end, deepcopy(rPr)))
+    return spans
+
+
 def _looks_like_preserved_legal_latin(text: str) -> bool:
     snippet = text.strip(" \t\n\r,;:()[]")
     if not snippet or snippet != snippet.casefold():
@@ -2917,17 +3126,44 @@ def _project_preserved_italic_spans(
         right_boundary = end == len(new_text) or not new_text[end].isalnum()
         return alnum_len >= 2 and left_boundary and right_boundary
 
-    matcher = difflib.SequenceMatcher(a=old_text, b=new_text, autojunk=False)
+    old_tokens = _tokenize(old_text)
+    new_tokens = _tokenize(new_text)
+
+    old_tok_starts: List[int] = []
+    cursor = 0
+    for tok in old_tokens:
+        old_tok_starts.append(cursor)
+        cursor += len(tok)
+    old_total = cursor
+
+    new_tok_starts: List[int] = []
+    cursor = 0
+    for tok in new_tokens:
+        new_tok_starts.append(cursor)
+        cursor += len(tok)
+    new_total = cursor
+
+    def token_char_range(tokens: List[str], starts: List[int], total: int, i1: int, i2: int) -> Tuple[int, int]:
+        if i1 == i2:
+            at = starts[i1] if i1 < len(starts) else total
+            return at, at
+        start = starts[i1]
+        end = starts[i2 - 1] + len(tokens[i2 - 1])
+        return start, end
+
+    matcher = difflib.SequenceMatcher(a=old_tokens, b=new_tokens, autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        old_start, old_end = token_char_range(old_tokens, old_tok_starts, old_total, i1, i2)
+        new_start, new_end = token_char_range(new_tokens, new_tok_starts, new_total, j1, j2)
         if tag == "equal":
             for span_start, span_end in old_italic_spans:
-                overlap_start = max(i1, span_start)
-                overlap_end = min(i2, span_end)
+                overlap_start = max(old_start, span_start)
+                overlap_end = min(old_end, span_end)
                 if overlap_start >= overlap_end:
                     continue
-                offset = overlap_start - i1
-                projected_start = j1 + offset
-                projected_end = j1 + offset + (overlap_end - overlap_start)
+                offset = overlap_start - old_start
+                projected_start = new_start + offset
+                projected_end = new_start + offset + (overlap_end - overlap_start)
                 if is_meaningful_projected_span(projected_start, projected_end):
                     projected.append((projected_start, projected_end))
             continue
@@ -2935,23 +3171,35 @@ def _project_preserved_italic_spans(
         if (
             tag == "replace"
             and preserve_changed_text
-            and _range_fully_covered_by_spans(old_italic_spans, i1, i2)
-            and j1 < j2
-            and is_meaningful_projected_span(j1, j2)
-            and not _looks_like_non_case_citation_metadata(new_text[j1:j2])
+            and new_start < new_end
         ):
-            projected.append((j1, j2))
+            old_len = max(1, old_end - old_start)
+            new_len = new_end - new_start
+            for span_start, span_end in _merge_spans(old_italic_spans):
+                overlap_start = max(old_start, span_start)
+                overlap_end = min(old_end, span_end)
+                if overlap_start >= overlap_end:
+                    continue
+                rel_start = (overlap_start - old_start) / old_len
+                rel_end = (overlap_end - old_start) / old_len
+                projected_start = new_start + int(math.floor(rel_start * new_len))
+                projected_end = new_start + int(math.ceil(rel_end * new_len))
+                if not is_meaningful_projected_span(projected_start, projected_end):
+                    continue
+                if _looks_like_non_case_citation_metadata(new_text[projected_start:projected_end]):
+                    continue
+                projected.append((projected_start, projected_end))
             continue
 
         if (
             tag == "insert"
             and preserve_changed_text
-            and _position_inside_span(old_italic_spans, i1)
-            and j1 < j2
-            and is_meaningful_projected_span(j1, j2)
-            and not _looks_like_non_case_citation_metadata(new_text[j1:j2])
+            and _position_inside_span(old_italic_spans, old_start)
+            and new_start < new_end
+            and is_meaningful_projected_span(new_start, new_end)
+            and not _looks_like_non_case_citation_metadata(new_text[new_start:new_end])
         ):
-            projected.append((j1, j2))
+            projected.append((new_start, new_end))
 
     trimmed = [_trim_span_outer_whitespace(new_text, span) for span in _merge_spans(projected)]
     return _merge_spans([span for span in trimmed if span[0] < span[1]])
@@ -3714,6 +3962,21 @@ def _paragraph_text_run_segments(
     return run_segments
 
 
+def _paragraph_text_run_segments_all_runs(p: etree._Element) -> List[Tuple[etree._Element, int, int, str]]:
+    run_segments: List[Tuple[etree._Element, int, int, str]] = []
+    cursor = 0
+    for run in p.xpath(".//w:r", namespaces=NS):
+        if _is_reference_run(run):
+            continue
+        run_text = "".join(run.xpath("./w:t/text()", namespaces=NS))
+        if run_text == "":
+            continue
+        start, end = cursor, cursor + len(run_text)
+        run_segments.append((run, start, end, run_text))
+        cursor = end
+    return run_segments
+
+
 def _apply_italic_spans_to_runs(
     p: etree._Element,
     spans: List[Tuple[int, int]],
@@ -3809,17 +4072,26 @@ def _clear_italic_spans_to_runs(
 def _merge_preserved_span_rpr(
     current_rPr: Optional[etree._Element],
     preserved_rPr: etree._Element,
+    *,
+    preserve_current_markup: bool = True,
 ) -> etree._Element:
-    merged_rPr = deepcopy(current_rPr) if current_rPr is not None else etree.Element(w_tag("rPr"))
+    merged_rPr = deepcopy(preserved_rPr) if preserve_current_markup else etree.Element(w_tag("rPr"))
     for preserved_child in preserved_rPr:
         local_name = etree.QName(preserved_child).localname
-        if local_name in {"b", "bCs", "highlight"}:
+        if preserve_current_markup and local_name == "highlight":
             if merged_rPr.find(f"w:{local_name}", namespaces=NS) is None:
                 merged_rPr.append(deepcopy(preserved_child))
             continue
         for existing in merged_rPr.findall(f"w:{local_name}", namespaces=NS):
             merged_rPr.remove(existing)
         merged_rPr.append(deepcopy(preserved_child))
+    if preserve_current_markup and current_rPr is not None:
+        current_highlight = current_rPr.find("w:highlight", namespaces=NS)
+        if current_highlight is not None:
+            existing_highlight = merged_rPr.find("w:highlight", namespaces=NS)
+            if existing_highlight is not None:
+                merged_rPr.remove(existing_highlight)
+            merged_rPr.append(deepcopy(current_highlight))
     style_node = merged_rPr.find("w:rStyle", namespaces=NS)
     if style_node is not None and (style_node.get(w_tag("val")) or "").strip() == "FootnoteReference":
         merged_rPr.remove(style_node)
@@ -3831,6 +4103,7 @@ def _apply_rpr_spans_to_runs(
     spans: List[Tuple[int, int, etree._Element]],
     *,
     after_reference_marker: bool = False,
+    preserve_current_markup: bool = True,
 ) -> int:
     if not spans:
         return 0
@@ -3849,7 +4122,11 @@ def _apply_rpr_spans_to_runs(
         children = [c for c in list(run) if c.tag != w_tag("rPr")]
         if len(children) != 1 or children[0].tag != w_tag("t"):
             current_rPr = run.find("w:rPr", namespaces=NS)
-            merged_rPr = _merge_preserved_span_rpr(current_rPr, local_spans[0][2])
+            merged_rPr = _merge_preserved_span_rpr(
+                current_rPr,
+                local_spans[0][2],
+                preserve_current_markup=preserve_current_markup,
+            )
             current_xml = etree.tostring(current_rPr, encoding="unicode") if current_rPr is not None else ""
             merged_xml = etree.tostring(merged_rPr, encoding="unicode")
             if current_xml == merged_xml:
@@ -3891,7 +4168,11 @@ def _apply_rpr_spans_to_runs(
             nr = _clone_run_with_rPr(run)
             current_rPr = nr.find("w:rPr", namespaces=NS)
             if piece_rPr is not None:
-                merged_rPr = _merge_preserved_span_rpr(current_rPr, piece_rPr)
+                merged_rPr = _merge_preserved_span_rpr(
+                    current_rPr,
+                    piece_rPr,
+                    preserve_current_markup=preserve_current_markup,
+                )
                 _replace_run_rpr(nr, merged_rPr)
                 changed += 1
             nr.append(_t(piece_text))
@@ -4065,48 +4346,12 @@ def _normalize_body_italics(
 
 
 def _normalize_bibliography_bold(document_root: etree._Element) -> int:
-    changed = 0
-    in_bibliography = False
-
-    for p in _iter_body_paragraphs(document_root):
-        paragraph_text = _paragraph_text_all_runs(p)
-        normalized_heading = _normalize_text(paragraph_text)
-
-        if normalized_heading in BIBLIOGRAPHY_HEADINGS:
-            in_bibliography = True
-            is_heading = True
-        elif in_bibliography and normalized_heading in BIBLIOGRAPHY_SECTION_HEADINGS:
-            is_heading = True
-        elif in_bibliography and normalized_heading in NON_BIBLIOGRAPHY_SECTION_HEADINGS and normalized_heading not in BIBLIOGRAPHY_SECTION_HEADINGS:
-            in_bibliography = False
-            is_heading = False
-        else:
-            is_heading = False
-
-        if not in_bibliography:
-            continue
-
-        for run in p.xpath("./w:r", namespaces=NS):
-            if run.find("w:footnoteReference", namespaces=NS) is not None:
-                continue
-            if not "".join(run.xpath("./w:t/text()", namespaces=NS)).strip():
-                continue
-            rPr = run.find("w:rPr", namespaces=NS)
-            if rPr is None:
-                rPr = etree.Element(w_tag("rPr"))
-                run.insert(0, rPr)
-            if is_heading:
-                before = etree.tostring(rPr, encoding="unicode")
-                _set_bold(rPr)
-                after = etree.tostring(rPr, encoding="unicode")
-                if before != after:
-                    changed += 1 + _mark_run_formatting_change(run)
-            else:
-                cleared = _clear_bold(rPr)
-                if cleared:
-                    changed += cleared + _mark_run_formatting_change(run)
-
-    return changed
+    # Preserve user-authored bold exactly as supplied. Bibliography headings and
+    # entries are content-sensitive, but automatic bold/unbold normalization
+    # conflicts with the amend engine's formatting lock and can restyle user
+    # emphasis even when no textual amendment requires it.
+    del document_root
+    return 0
 
 
 def _normalize_body_footnote_reference_positions(
@@ -4145,6 +4390,54 @@ def _normalize_body_footnote_reference_positions(
             changed += 1
 
         changed += _dedupe_adjacent_body_footnote_reference_runs(paragraph)
+
+    return changed
+
+
+def _paragraph_has_yellow_highlighted_text(paragraph: etree._Element) -> bool:
+    for run in paragraph.xpath("./w:r", namespaces=NS):
+        rPr = run.find("w:rPr", namespaces=NS)
+        if rPr is None:
+            continue
+        highlight = rPr.find("w:highlight", namespaces=NS)
+        if highlight is None:
+            continue
+        if (highlight.get(w_tag("val")) or "").strip().lower() != "yellow":
+            continue
+        if run.xpath("./w:t|./w:tab|./w:br|./w:noBreakHyphen|./w:softHyphen", namespaces=NS):
+            return True
+    return False
+
+
+def _normalize_body_paragraph_properties_from_original(
+    original_root: etree._Element,
+    current_root: etree._Element,
+) -> int:
+    original_paragraphs = _iter_body_paragraphs(original_root)
+    current_paragraphs = _iter_body_paragraphs(current_root)
+    if len(original_paragraphs) != len(current_paragraphs):
+        return 0
+
+    changed = 0
+    for template_paragraph, paragraph in zip(original_paragraphs, current_paragraphs):
+        if (
+            _paragraph_text_all_runs(template_paragraph) == _paragraph_text_all_runs(paragraph)
+            and not _paragraph_has_yellow_highlighted_text(paragraph)
+        ):
+            continue
+
+        template_pPr = template_paragraph.find("w:pPr", namespaces=NS)
+        current_pPr = paragraph.find("w:pPr", namespaces=NS)
+        template_xml = etree.tostring(template_pPr, encoding="unicode") if template_pPr is not None else ""
+        current_xml = etree.tostring(current_pPr, encoding="unicode") if current_pPr is not None else ""
+        if template_xml == current_xml:
+            continue
+
+        if current_pPr is not None:
+            paragraph.remove(current_pPr)
+        if template_pPr is not None:
+            paragraph.insert(0, deepcopy(template_pPr))
+        changed += 1
 
     return changed
 
@@ -4354,9 +4647,9 @@ def refine_from_amended(
         changed += body_italics_fixed
         parts_to_write[part] = orig_root
 
-    bibliography_bold_fixed = _normalize_bibliography_bold(orig_root)
-    if bibliography_bold_fixed:
-        changed += bibliography_bold_fixed
+    body_style_fixed = _normalize_body_paragraph_properties_from_original(orig_root_template, orig_root)
+    if body_style_fixed:
+        changed += body_style_fixed
         parts_to_write[part] = orig_root
 
     _write_docx_with_replaced_parts(original_docx, out_docx, parts_to_write)

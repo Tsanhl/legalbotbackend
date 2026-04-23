@@ -7,7 +7,7 @@ The project is backend-only now. Use the Python services directly instead of a f
 - `backend_answer_runtime.send_complete_answer_with_docs(...)`
   Canonical backend complete-answer path. Defaults to direct/backend delivery, keeps legal RAG and code-guide routing active, runs the stricter complete-answer verification layer, and can now honour chat / `.md` / `.docx` delivery requests from the same path.
 - `backend_answer_runtime.send_complete_answer_with_output(...)`
-  Canonical delivery wrapper. Chat output, project `.md` files, and Desktop `.docx` files all derive from the same backend-generated and verified answer text, and registered one-off helper artifacts can be cleaned after a successful answer run.
+  Canonical delivery wrapper. Chat output, project `.md` files, and Desktop `.docx` files all derive from the same backend-generated and verified answer text, and registered temporary task-specific helper artifacts can be cleaned after a successful answer run.
 - `legal_doc_tools.workflow.run_auto_legal_doc_amend_workflow(...)`
   Automatic amend pipeline for uploaded or local DOCX files.
 

@@ -11,7 +11,10 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from model_applicable_service import send_message_with_docs
+from model_applicable_service import (
+    mark_legal_doc_amend_session_active,
+    send_message_with_docs,
+)
 from word_count_rules import (
     count_words_for_targeting_from_texts,
     extract_requested_word_count_rule,
@@ -35,7 +38,6 @@ from .refine_docx_from_amended import (
     _load_docx_xml_if_exists,
     _normalize_body_footnote_reference_positions,
     _normalize_body_footnote_reference_styles_from_original,
-    _normalize_bibliography_bold,
     _normalize_body_italics,
     _normalize_case_italics_in_footnotes,
     _normalize_footnote_styles_from_original,
@@ -223,6 +225,8 @@ def _build_comment_scope_for_prompt(source_path: Path, *, based_on_comments: boo
 
     lines = [
         "Comment scope (mandatory when the user asked for comment-based amendments):",
+        "- abstract each comment into a reusable drafting/control rule and sweep the full document for the same issue, not just the flagged sentence.",
+        "- carry forward only the abstract drafting lesson from comments; do not persist document-specific facts, names, quotations, or authority strings as reusable defaults.",
         "- return `comment_coverage.docx_comments_addressed` and `comment_coverage.inline_comments_addressed` covering every listed item.",
     ]
     docx_comments = _extract_docx_comment_entries(source_path)
@@ -793,7 +797,7 @@ def _build_structured_amend_prompt(
 - the user's original DOCX is read-only. Never overwrite the original source file path.
 - this amend workflow is copy-first and non-destructive: the backend applies changes only to a new amended output copy.
 - implemented amendment markup is yellow highlight only. Do not request bold markup, plain unmarked output, or any other styling change.
-- preserve the user's original local DOCX styling everywhere else: font, size, spacing, alignment, paragraph style, footnote system, and local emphasis pattern remain unchanged unless a targeted correction is required by the active citation style.
+- preserve the user's original local DOCX styling everywhere else: font, size, spacing, alignment, paragraph style, footnote system, and unchanged emphasis remain untouched unless a targeted citation-style correction requires added italics. Do not let paragraph defaults or generic template inheritance leak bold/italic onto changed wording; preserve explicit local user emphasis where the amendment remains inside that user-styled span.
 - final amend delivery is one protected amended DOCX saved directly in Desktop root. Use the canonical Desktop filename first, then allocate the next versioned sibling if a prior final amended output already exists.
 """.strip()
 
@@ -844,6 +848,7 @@ Mandatory quality standard:
 - explicit user requirements override generic defaults: if the user specifies citation style, word count, exclusions, bibliography/reference handling, or formatting constraints, follow those instructions consistently.
 - if the draft or the user instruction gives a question, rubric, benchmark, or target, make the amended result fully fit that target.
 - strengthen analysis, counterarguments, rebuttals, and evaluative links where needed to reach top-band quality.
+- learn reviewer/user feedback at rule level: convert comments and prior corrections into reusable drafting rules, apply them across analogous paragraphs/footnotes, and keep only the abstract lesson rather than document-specific confidential content.
 - runtime amend-delivery rules:
 {amend_runtime_rules}
 - apply marker-feedback discipline on structure and clarity:
@@ -857,7 +862,20 @@ Mandatory quality standard:
   (vii) do not repeat in a section-ending paragraph what is already reserved for the final conclusion;
   (viii) if a marker flags repetition, remove the earlier or weaker instance and keep the stronger formulation in the paragraph that actually performs the analytical work, usually as that paragraph's topic sentence;
   (ix) do not use loose jurisdictional qualifiers such as "particularly in the UK context" unless you also state the legal reason the jurisdiction matters;
-  (x) prefer fact-matched labels, for example "consumer choice" in a consumer-facing problem, rather than drifting between "user", "consumer", and "customer" without analytical reason.
+  (x) prefer fact-matched labels, for example "consumer choice" in a consumer-facing problem, rather than drifting between "user", "consumer", and "customer" without analytical reason;
+  (xi) if a sentence would prompt "Compared with what?", "From what?", "Harmed how?", "With what effect?", "Protection from what?", "Immunity from what?", or "Which are what?", answer that explicitly instead of leaving the comparator, mechanism, object, or consequence implicit;
+  (xii) quantify or calibrate comparative and superlative claims rather than asserting bare absolutes such as "highest" or "most" without evidential support;
+  (xii-a) use measured register; avoid loaded adjectives such as "catastrophic", "devastating", or "seismic" unless the source-backed analysis genuinely warrants that level of rhetoric;
+  (xii-b) define acronyms and specialist shorthands on first use, for example "MQD" or other compressed labels, and explain their legal function briefly rather than assuming the label is self-explanatory;
+  (xii-c) when summarising an earlier section, chapter, case, or source, do not claim it established more than it actually did; keep the summary within the true scope of the underlying material;
+  (xii-d) if a comparative, economic, or institutional claim depends on scale, cost, investment, or market effect, give the relevant comparator figures where available or narrow the proposition to what the verified evidence really supports;
+  (xiii) if you use a distinctive label or coined term, define it on first use and say whether it comes from the literature or is your own shorthand; if borrowed, cite or anchor it properly;
+  (xiii-a) when introducing a case, statute, report, or example, add a short orienting explanation of why it matters to the point being made rather than assuming the authority name performs the analysis by itself;
+  (xiv) do not create a separate subheading or micro-section for a point that has only one thin paragraph or no distinct analytical job; merge it into the stronger adjacent section;
+  (xv) if a later section or chapter introduces an emerging-development point or new technology, tie it back to the main thesis and earlier doctrinal gaps rather than leaving it as a detached add-on;
+  (xvi) if a feature appears to support your own thesis, do not criticise it as if it were a defect unless you explain the narrower tension, cost, or trade-off you actually mean.
+  (xvi-a) if your proposed reform appears open to the same cost, complexity, burden, or delay objection that you level against the current framework, address that parity objection expressly rather than leaving the tension unanswered;
+- if feedback indicates vagueness, sweep for the same ambiguity globally and replace shorthand with explicit doctrine, comparator, mechanism, actor, and consequence instead of fixing only one sentence.
 - for EU/UK competition-law answers in particular:
   (i) locate dominance and abuse in the undertaking, not the product; treat the product or ecosystem as the channel through which market power is exercised;
   (ii) do not over-plead self-preferencing or discrimination when the facts mainly show tying, defaults, pre-installation, or exploitative terms; keep weaker abuse labels secondary unless unequal treatment facts are actually shown;
@@ -865,8 +883,10 @@ Mandatory quality standard:
   (iv) in objective-justification analysis, tie court-order or statutory-duty arguments to a specifically identified duty and explain why broader wording is over-inclusive or disproportionate;
   (v) if lack of meaningful choice is a key analytical premise, state it once in the paragraph doing that work and avoid duplicating the same choice point in nearby paragraphs.
 - preserve the author's thesis and voice while strengthening precision and analysis.
-- preserve the user's exact local DOCX styling for every inserted or replaced segment: same font family, font size, paragraph style, spacing, and local emphasis pattern as the surrounding user text. Do not introduce default app styling or a different font/size.
-- preserve user-applied italics/bold/underline where they are already correct. Only correct local emphasis when the active style clearly requires a fix.
+- preserve the user's exact local DOCX styling for every inserted or replaced segment: same font family, font size, paragraph style, spacing, indentation, alignment, and other non-emphasis typography as the surrounding user text. Do not introduce default app styling or a different font/size.
+- never normalize the user's line spacing. If the source paragraph uses 1.5-line spacing, keep 1.5-line spacing; if it uses double spacing, keep double spacing. Match the exact local paragraph spacing already used in that location.
+- preserve user-applied bold/italic/underline on unchanged text. For changed wording, always use yellow highlight, never invent new emphasis from paragraph defaults, and preserve local user-authored emphasis where the amendment stays inside the same styled span. Only add missing italics where the active style clearly requires them, and otherwise leave the user's emphasis untouched.
+- changed wording must keep the user's local bold/italic/underline when that exact local span already used it; yellow highlight is the amendment markup layer, not a reason to flatten user styling.
 - preserve correctly formatted short-form case citations exactly as the user has styled them. If `Hoffmann-La Roche (n 5)` or `Intel (n 5)` is already correctly italicised in the case-name portion, do not restyle it; if the required case-name italics are missing, add italics only to the case-name portion and keep `(n X)` in roman text.
 - preserve exact local DOCX typography rather than flattening the paragraph or footnote into one template style. Keep the user's local font family, font size, colour, paragraph style, spacing, and non-erroneous mixed run styling where it already exists.
 - keep the same paragraph count and the same footnote IDs. Do not add or remove paragraphs. Do not add or remove footnote IDs.
@@ -1108,7 +1128,6 @@ def apply_structured_amendment_plan(
         _normalize_body_footnote_reference_styles_from_original(doc_template, doc_root)
         _normalize_body_footnote_reference_positions(doc_root, footnotes_root)
         _normalize_body_italics(doc_root, footnotes_root)
-        _normalize_bibliography_bold(doc_root)
         parts_to_write["word/document.xml"] = doc_root
 
         _assert_original_footnotes_preserved_if_relevant(
@@ -1225,6 +1244,7 @@ def run_uploaded_legal_doc_amend_workflow(
         if changed_items <= 0:
             raise ValueError("No detectable amendments were generated for the DOCX.")
         download_bytes = output_path.read_bytes()
+        mark_legal_doc_amend_session_active(project_id)
         return LegalDocAmendResult(
             output_path=output_path,
             summary=summary,

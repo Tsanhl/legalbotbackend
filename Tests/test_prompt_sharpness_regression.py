@@ -52,12 +52,28 @@ def run() -> None:
         "Separate doctrine from policy openly",
         "state the realistic remedy, forum, and practical litigation position",
         "do NOT append a bibliography, source list, web links, or 'primary sources checked' section",
+        "convert it into a reusable drafting rule and sweep the whole answer for the same problem",
+        "Do not retain or repeat document-specific confidential facts, names, quotations, or authority lists",
+        "replace shorthand with explicit doctrine, comparator, mechanism, actor, and consequence",
+        "run a final prompt-map sweep",
+        "Remove vague referents.",
+        "Use the available word budget on the hardest issues.",
+        "Where a recent statute, commencement, or appellate reform materially changes the law",
+        "Distinguish between points that are merely arguable",
+        "identify which reform actually changes the analysis on these facts",
+        "Use measured register.",
+        "Define acronyms and specialist shorthands on first use.",
+        "do not claim it proved more than it actually established",
+        "give the relevant comparator figures where available",
+        "When introducing an authority, say briefly why it matters",
+        "address that parity objection expressly",
     ]:
         assert line in quality_gate, line
 
     with open("model_applicable_service.py", "r", encoding="utf-8") as fh:
         src = fh.read()
     assert "do NOT append a bibliography, source list, web links, or 'primary sources checked' section" in src
+    assert "feedback abstraction and privacy rule is mandatory" in src.lower()
     assert "stronger hearsay essays explain that the 2003 Act mixes necessity" in src
 
     print("Prompt sharpness regression passed.")

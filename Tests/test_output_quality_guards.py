@@ -166,6 +166,11 @@ def run() -> None:
     assert "Question 1, Question 2, etc." in gemini_src
     assert "Do NOT use any 'Answer 1:' or 'Answer 2:' wrappers." in gemini_src
     assert "use Answer 1 / Answer 2 headings" not in gemini_src
+    assert "[MCQ QUESTION-SET CORRECTION MODE]" in gemini_src
+    assert "[MCQ GENERATION MODE]" in gemini_src
+    assert "[MCQ WORKFLOW OVERRIDE — HIGHEST PRIORITY]" in gemini_src
+    assert "[STRUCTURE ENFORCEMENT — MCQ WORKFLOW MODE]" in gemini_src
+    assert "MCQ correction/generation mode requires search-backed verification alongside RAG for answer-key accuracy" in gemini_src
     assert "model_user_message_override: Optional[str] = None" in gemini_src
     assert 'essay_policy_prompt = (original_request_text or message or "")' in gemini_src
     assert "[SINGLE-QUESTION LONG-ANSWER COHERENCE RULES]" in gemini_src

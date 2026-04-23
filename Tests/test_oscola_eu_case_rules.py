@@ -27,12 +27,14 @@ assert "For EU cases, use `para` / `paras` after a comma for pinpoint paragraph 
 assert "Case C-527/15 Stichting Brein v Jack Frederik Wullems [2017] OJ C195/02." in guide_text
 assert "If the user has already italicised a short-form case name correctly" in guide_text
 assert "keep case names in roman by default" in guide_text
-assert "same local font family, font size, paragraph style, spacing, and emphasis pattern" in guide_text
+assert "other non-emphasis typography" in guide_text
+assert "The only default markup addition is yellow highlight on changed wording; local user emphasis must be preserved rather than stripped or replaced." in guide_text
+assert "If the original paragraph uses 1.5-line spacing, keep 1.5-line spacing. If the original paragraph uses double spacing, keep double spacing." in guide_text
 assert "Added-support rule for DOCX amendments" in guide_text
 assert "Body-italics preservation rule (mandatory)" in guide_text
 assert "Footnote/bibliography italics preservation rule (mandatory)" in guide_text
 assert "Plain-text inline OSCOLA typography rule (mandatory)" in guide_text
-assert "Bibliography bolding rule (mandatory)" in guide_text
+assert "Bibliography bold preservation rule (mandatory)" in guide_text
 assert "OSCOLA author-name separation rule (mandatory)" in guide_text
 assert "In footnotes, give personal author/editor names in the form used in the publication" in guide_text
 assert "In bibliography/reference entries, invert personal names to `Surname Initial,`" in guide_text
@@ -44,6 +46,7 @@ assert "Case C-176/03 *Commission v Council* [2005] ECR I-7879, paras 47-48" in 
 assert "Italicise case names inside those parenthetical OSCOLA citations as well" in gemini_text
 assert "keep case names in roman there by default" in gemini_text
 assert "OSCOLA bibliography format is not OSCOLA footnote format" in gemini_text
+assert "If the original paragraph uses 1.5-line spacing, keep 1.5-line spacing; if it uses double spacing, keep double spacing." in gemini_text
 
 
 document_root = etree.fromstring(
@@ -135,14 +138,17 @@ bib_root = etree.fromstring(
   </w:body>
 </w:document>"""
 )
-assert _normalize_bibliography_bold(bib_root) >= 1
+before_bib_xml = etree.tostring(bib_root, encoding="unicode")
+assert _normalize_bibliography_bold(bib_root) == 0
+after_bib_xml = etree.tostring(bib_root, encoding="unicode")
+assert before_bib_xml == after_bib_xml
 bib_heading_runs = bib_root.xpath("/w:document/w:body/w:p[1]/w:r", namespaces=NS)
-assert any(run.xpath("./w:rPr/w:b|./w:rPr/w:bCs", namespaces=NS) for run in bib_heading_runs)
+assert not any(run.xpath("./w:rPr/w:b|./w:rPr/w:bCs", namespaces=NS) for run in bib_heading_runs)
 bib_case_runs = bib_root.xpath("/w:document/w:body/w:p[2]/w:r", namespaces=NS)
-assert not any(run.xpath("./w:rPr/w:b|./w:rPr/w:bCs", namespaces=NS) for run in bib_case_runs)
+assert any(run.xpath("./w:rPr/w:b|./w:rPr/w:bCs", namespaces=NS) for run in bib_case_runs)
 journal_heading_runs = bib_root.xpath("/w:document/w:body/w:p[3]/w:r", namespaces=NS)
-assert any(run.xpath("./w:rPr/w:b|./w:rPr/w:bCs", namespaces=NS) for run in journal_heading_runs)
+assert not any(run.xpath("./w:rPr/w:b|./w:rPr/w:bCs", namespaces=NS) for run in journal_heading_runs)
 journal_entry_runs = bib_root.xpath("/w:document/w:body/w:p[4]/w:r", namespaces=NS)
-assert not any(run.xpath("./w:rPr/w:b|./w:rPr/w:bCs", namespaces=NS) for run in journal_entry_runs)
+assert any(run.xpath("./w:rPr/w:b|./w:rPr/w:bCs", namespaces=NS) for run in journal_entry_runs)
 
 print("OSCOLA EU case-law rule regression checks passed.")

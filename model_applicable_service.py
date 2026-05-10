@@ -22272,15 +22272,13 @@ def detect_topic_notes_request(message: str) -> dict:
     return result
 
 
-def _extract_requested_mcq_count(message: str) -> Optional[int]:
+def _extract_sqe_set_number(message: str) -> Optional[int]:
     raw = str(message or "")
     if not raw.strip():
         return None
     patterns = [
-        r"(?i)\b(\d{1,3})\s*(?:mcq|mcqs|multiple[- ]choice questions?|single best answer questions?|sba questions?|questions?)\b",
-        r"(?i)\b(?:generate|create|draft|write|give|make|prepare|produce|set)\s+(\d{1,3})\s*(?:mcq|mcqs|multiple[- ]choice questions?|single best answer questions?|sba questions?|questions?)\b",
-        r"(?i)\b(\d{1,3})\b(?=[^\n]{0,80}\b(?:mcq|mcqs|multiple[- ]choice questions?|single best answer questions?|sba questions?|questions?)\b)",
-        r"(?i)\b(?:generate|create|draft|write|give|make|prepare|produce|set)\s+(\d{1,3})\b",
+        r"(?i)\bset\s*(?:no\.?|number|#)?\s*(\d{1,3})(?!\s*(?:questions?|mcqs?|sbas?|single[- ]best))\b",
+        r"(?i)\bquestion\s*set\s*(?:no\.?|number|#)?\s*(\d{1,3})(?!\s*(?:questions?|mcqs?|sbas?|single[- ]best))\b",
     ]
     for pattern in patterns:
         match = re.search(pattern, raw)
@@ -22289,8 +22287,47 @@ def _extract_requested_mcq_count(message: str) -> Optional[int]:
                 value = int(match.group(1))
             except Exception:
                 value = 0
+            if 1 <= value <= 999:
+                return value
+    return None
+
+
+def _extract_requested_mcq_count(message: str) -> Optional[int]:
+    raw = str(message or "")
+    if not raw.strip():
+        return None
+    patterns = [
+        r"(?i)\b(\d{1,3})\s*(?:mcq|mcqs|multiple[- ]choice questions?|single best answer questions?|sba questions?|questions?)\b",
+        r"(?i)\b(?:generate|create|draft|write|give|make|prepare|produce|set)\s+(\d{1,3})\s*(?:mcq|mcqs|multiple[- ]choice questions?|single best answer questions?|sba questions?|questions?)\b",
+        r"(?i)\b(\d{1,3})\b(?=[^\n]{0,80}\b(?:mcq|mcqs|multiple[- ]choice questions?|single best answer questions?|sba questions?|questions?)\b)",
+        r"(?i)\b(?:generate|create|draft|write|give|make|prepare|produce)\s+(\d{1,3})\b",
+    ]
+    set_number = _extract_sqe_set_number(raw)
+    for pattern in patterns:
+        for match in re.finditer(pattern, raw):
+            try:
+                value = int(match.group(1))
+            except Exception:
+                value = 0
+            if set_number and value == set_number:
+                prefix = raw[max(0, match.start() - 18):match.start()].lower()
+                if re.search(r"\b(?:set|question\s+set)\s*(?:no\.?|number|#)?\s*$", prefix):
+                    continue
             if 1 <= value <= 250:
                 return value
+    return None
+
+
+def _detect_sqe_exam_kind(message: str) -> Optional[str]:
+    low = (message or "").lower()
+    if re.search(r"\b(?:sqe\s*2|sqe2)\b", low):
+        return "sqe2"
+    if re.search(r"\b(?:flk\s*2|flk2)\b", low):
+        return "flk2"
+    if re.search(r"\b(?:flk\s*1|flk1)\b", low):
+        return "flk1"
+    if re.search(r"\b(?:sqe\s*1|sqe1)\b", low):
+        return "sqe1"
     return None
 
 
@@ -22315,7 +22352,14 @@ def detect_mcq_workflow_request(message: str) -> Dict[str, Any]:
         "mode": None,
         "question_count": None,
         "sqe_requested": ("sqe" in msg_lower) or ("flk" in msg_lower),
+        "sqe_exam": _detect_sqe_exam_kind(raw),
+        "set_number": _extract_sqe_set_number(raw),
         "no_repeat_requested": False,
+        "sample_style_requested": False,
+        "harder_requested": False,
+        "cover_all_requested": False,
+        "wrong_focus_requested": False,
+        "niche_requested": False,
         "response_detail": "questions_only",
     }
     if not msg_lower.strip():
@@ -22368,6 +22412,16 @@ def detect_mcq_workflow_request(message: str) -> Dict[str, Any]:
         "test me",
         "testing mcq",
     ]
+    explicit_mcq_patterns = [
+        " mcq",
+        "mcqs",
+        "multiple choice",
+        "multiple-choice",
+        "single best answer",
+        "single-best-answer",
+        "sba ",
+        "sbas",
+    ]
 
     result["no_repeat_requested"] = any(
         token in msg_lower for token in [
@@ -22384,6 +22438,66 @@ def detect_mcq_workflow_request(message: str) -> Dict[str, Any]:
             "not repeat previous sets",
         ]
     )
+    result["sample_style_requested"] = any(
+        token in msg_lower for token in [
+            "sample",
+            "sample question",
+            "sample questions",
+            "official sample",
+            "sra sample",
+            "provided pdf",
+            "uploaded pdf",
+            "like the sample",
+            "align to style",
+            "aligned to style",
+        ]
+    )
+    result["harder_requested"] = any(
+        token in msg_lower for token in [
+            "more difficult",
+            "much more difficult",
+            "harder",
+            "hardest",
+            "difficult than sample",
+            "difficult than real",
+            "killer",
+            "advanced",
+        ]
+    )
+    result["cover_all_requested"] = any(
+        token in msg_lower for token in [
+            "cover all",
+            "cover every",
+            "all topics",
+            "every topic",
+            "full coverage",
+            "whole flk",
+            "entire flk",
+        ]
+    )
+    result["wrong_focus_requested"] = any(
+        token in msg_lower for token in [
+            "only wrong",
+            "wrong questions",
+            "wrongs questions",
+            "wrongs question",
+            "my wrongs",
+            "previous wrongs",
+            "weak areas",
+            "weak topics",
+        ]
+    )
+    result["niche_requested"] = any(
+        token in msg_lower for token in [
+            "niche",
+            "edge case",
+            "edge-case",
+            "tricky",
+            "trap",
+            "traps",
+            "obscure",
+        ]
+    )
 
     if any(token in msg_lower for token in ["with full explanations", "full explanations", "explain each answer", "why each answer"]):
         result["response_detail"] = "full_explanations"
@@ -22395,7 +22509,22 @@ def detect_mcq_workflow_request(message: str) -> Dict[str, Any]:
         result["question_count"] = requested_count
 
     wants_correction = any(pattern in msg_lower for pattern in correction_patterns)
+    explicit_mcq_signal = any(pattern in msg_lower for pattern in explicit_mcq_patterns)
     wants_generation = any(pattern in msg_lower for pattern in generation_patterns)
+    if result.get("sqe_exam") == "sqe2" and wants_generation and not explicit_mcq_signal:
+        wants_generation = False
+    set_generation_signal = bool(
+        result.get("set_number")
+        and result.get("sqe_requested")
+        and (
+            any(token in msg_lower for token in ["give me", "draft", "create", "write", "make", "prepare", "produce", "generate"])
+            or result.get("sample_style_requested")
+            or result.get("harder_requested")
+            or result.get("cover_all_requested")
+            or result.get("wrong_focus_requested")
+            or result.get("niche_requested")
+        )
+    )
     if has_question_stem and has_answer_markers:
         wants_correction = True
     if wants_correction:
@@ -22405,7 +22534,7 @@ def detect_mcq_workflow_request(message: str) -> Dict[str, Any]:
         result["question_count"] = question_heading_count or result["question_count"]
         return result
 
-    if wants_generation:
+    if wants_generation or set_generation_signal:
         result["active"] = True
         result["mode"] = "generation"
         return result
@@ -22422,10 +22551,12 @@ def _build_mcq_workflow_prompt_block(
         return ""
     detail = str(mcq_mode.get("response_detail") or "questions_only")
     count = mcq_mode.get("question_count")
+    set_number = mcq_mode.get("set_number")
+    sqe_exam = str(mcq_mode.get("sqe_exam") or "").lower()
     count_line = (
         f"- Generate exactly {int(count)} MCQ question(s)."
         if isinstance(count, int) and count > 0
-        else "- Generate the exact number of MCQ questions the user requested."
+        else "- If the user gave a numbered SQE/FLK set but no separate question count, generate exactly 20 questions; otherwise generate the exact number of MCQ questions the user requested."
     )
     no_repeat_line = (
         "- Do not reuse or lightly reword questions, fact patterns, or tested propositions from prior sets visible in the chat history."
@@ -22437,13 +22568,47 @@ def _build_mcq_workflow_prompt_block(
         if mcq_mode.get("sqe_requested")
         else "- Keep the questions tightly inside the legal topic scope the user asked for."
     )
+    exam_scope_line = {
+        "flk1": "- SQE1 FLK1 scope: Business Law and Practice, Dispute Resolution, Contract, Tort, Legal System/Public Law, and Legal Services/professional conduct.",
+        "sqe1": "- SQE1 scope: if the user does not narrow to FLK1 or FLK2, balance the set across the requested SQE1/FLK subjects visible in the enquiry.",
+        "flk2": "- SQE1 FLK2 scope: Property Practice, Wills and Administration of Estates, Solicitors' Accounts, Land Law, Trusts, and Criminal Law and Practice.",
+    }.get(sqe_exam, "")
+    set_header_line = (
+        f"- Start the response with exactly `Set {int(set_number)}` on its own line, then a blank line, then the first question block."
+        if isinstance(set_number, int) and set_number > 0
+        else "- Start directly with the first question block unless the user supplied a set number."
+    )
+    sample_line = (
+        "- Use the uploaded/official SQE sample only as a style benchmark for stem shape, option style, and assessment feel. Do not copy, paraphrase, or lightly mutate any sample question."
+        if mcq_mode.get("sample_style_requested")
+        else "- Follow SQE-style single-best-answer drafting without copying any official or prior question."
+    )
+    difficulty_line = (
+        "- Difficulty target: materially harder than the official SQE sample and harder than ordinary SQE1 practice, using multi-step legal distinctions, close distractors, niche exceptions, and fact traps while preserving one clearly best answer."
+        if mcq_mode.get("harder_requested") or mcq_mode.get("niche_requested")
+        else "- Difficulty target: realistic SQE standard unless the user asks for a harder set."
+    )
+    coverage_line = (
+        "- Coverage target: plan the set internally to cover all requested subjects/topics fairly; do not cluster the set around one obvious doctrine unless the user requested a narrow topic."
+        if mcq_mode.get("cover_all_requested")
+        else "- Coverage target: follow the user's requested topic/focus. If no narrow topic is given, spread questions across a sensible range of the requested SQE/FLK scope."
+    )
+    wrong_focus_line = (
+        "- If the user identifies previous wrong answers or weak topics, target those weaknesses with fresh fact patterns while avoiding repeat questions."
+        if mcq_mode.get("wrong_focus_requested")
+        else "- Do not assume a wrong-answer remediation focus unless the user supplied wrong-answer history or weak-topic instructions."
+    )
 
     if mcq_mode.get("mode") == "correction":
-        return "\n".join([
+        correction_lines = [
             "[MCQ QUESTION-SET CORRECTION MODE]",
             "- This is a question-set correction workflow, not an essay, problem question, or revision-notes document.",
             "- Do NOT use `Part I: Introduction`, Part headings, Title lines, essay roadmaps, bibliographies, or inline citations unless the user expressly asks for authorities.",
-            "- Start EXACTLY with these labels in this order, each on its own line:",
+        ]
+        if isinstance(set_number, int) and set_number > 0:
+            correction_lines.append(f"- Start with exactly `Set {int(set_number)}` on the first line, then a blank line, then the corrected-overall-result summary.")
+        correction_lines.extend([
+            "- After any required set header, start EXACTLY with these labels in this order, each on its own line:",
             "  `Corrected overall result`",
             "  `Correct: Q...`",
             "  `Incorrect: Q...`",
@@ -22457,13 +22622,13 @@ def _build_mcq_workflow_prompt_block(
             "  `My answer: X`",
             "  `Result: Correct` or `Result: Incorrect`",
             "  `Correct answer: X`",
-            "  `Why A is wrong`",
-            "  `Why B is wrong`",
-            "  `Why C is wrong`",
-            "  `Why D is wrong`",
-            "  `Why E is wrong`",
-            "  `Why X is correct`",
+            "  `Why A is wrong` / `Why A is correct` as applicable",
+            "  `Why B is wrong` / `Why B is correct` as applicable",
+            "  `Why C is wrong` / `Why C is correct` as applicable",
+            "  `Why D is wrong` / `Why D is correct` as applicable",
+            "  `Why E is wrong` / `Why E is correct` as applicable",
             "  `Knowledge point tested`",
+            "- Explain each option exactly once, in A-E order. The correct option heading must say `correct`, not `wrong`.",
             "- Keep the option lettering and question numbering exactly aligned with the user's set.",
             "- If a question is genuinely ambiguous or defective, list it under `Defective question` and explain briefly in that question block instead of pretending certainty.",
             "- If the user supplied answers, preserve the user's chosen answer under `My answer:` and then mark it as correct or incorrect accurately.",
@@ -22472,6 +22637,7 @@ def _build_mcq_workflow_prompt_block(
             "- Accuracy override: every correction, answer key, and explanation must be supported by retrieved or otherwise verified legal material. If support is weak, mark the item as defective or qualify the uncertainty rather than guessing.",
             "- Do NOT add legal citations by default in this correction format. Only add authorities if the user explicitly asks for them.",
         ])
+        return "\n".join(correction_lines)
 
     output_detail_line = {
         "full_explanations": "- The user asked for answers/explanations, so after each question include `Answer: X` and a short explanation of why the answer is strongest.",
@@ -22485,10 +22651,19 @@ def _build_mcq_workflow_prompt_block(
         "- Do NOT use `Part I: Introduction`, Part headings, Title lines, bibliographies, or inline citations unless the user expressly asks for authorities.",
         count_line,
         sqe_line,
+        exam_scope_line,
+        set_header_line,
+        sample_line,
+        difficulty_line,
+        coverage_line,
+        wrong_focus_line,
         no_repeat_line,
         "- Each question must be a genuine single-best-answer MCQ with one clearly strongest answer and options A-E.",
+        "- Answer-option parity is mandatory: keep options A-E similar in length, grammar, specificity, and legal density. The correct answer must not be routinely longer, more qualified, or more legally polished than the distractors.",
+        "- Randomise the correct answer position across the set. Do not signal the answer through option length, absolute words, unique detail, or noticeably different drafting style.",
+        "- Distractors must be plausible legal errors, not obviously silly propositions. Use close distinctions, exceptions, timing traps, burden/standard errors, and remedy/procedure confusions.",
         "- Do not recycle the same legal rule with cosmetic fact changes. Vary the doctrine, factual trap, and tested distinction where the user's scope allows it.",
-        "- Start directly with `Question 1 – [topic / subtopic / issue]`, then `Question`, then the stem, then options A-E.",
+        "- Start the first block with `Question 1 – [topic / subtopic / issue]`; each later block must use the same `Question N – ...` pattern, then `Question`, then the stem, then options A-E.",
         output_detail_line,
         "- Accuracy override: every generated question and answer key must be supported by retrieved or otherwise verified legal material. If a proposition is not sufficiently verified, choose a safer question instead of guessing.",
         f"- Citation style note: active style is {_citation_style_label(citation_style)} only if the user later asks for authorities. By default, MCQ output should stay clean and citation-free.",

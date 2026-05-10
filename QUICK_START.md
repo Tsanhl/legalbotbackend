@@ -8,6 +8,10 @@ The project is backend-only now. Use the Python services directly instead of a f
   Canonical backend complete-answer path. Defaults to direct/backend delivery, keeps legal RAG and code-guide routing active, runs the stricter complete-answer verification layer, and can now honour chat / `.md` / `.docx` delivery requests from the same path.
 - `backend_answer_runtime.send_complete_answer_with_output(...)`
   Canonical delivery wrapper. Chat output, project `.md` files, and Desktop `.docx` files all derive from the same backend-generated and verified answer text, and registered temporary task-specific helper artifacts can be cleaned after a successful answer run.
+- `backend_answer_runtime.send_sqe_question_set_with_docs(...)`
+  Dedicated backend SQE question-set path. It supports FLK1, FLK2, SQE1, and SQE2 task generation, can attach official sample PDFs as style benchmarks, defaults to chat/API output, and disables essay-style complete-answer verification for question sets.
+- `backend_answer_runtime.send_sqe2_marking_with_docs(...)`
+  Dedicated SQE2 written-answer marking path. It marks candidate answers against the relevant written-skill criteria, uses the A-F simulated judgment scale, and can attach SQE2 sample/performance-indicator PDFs for guidance.
 - `legal_doc_tools.workflow.run_auto_legal_doc_amend_workflow(...)`
   Automatic amend pipeline for uploaded or local DOCX files.
 

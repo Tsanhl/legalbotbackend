@@ -237,6 +237,757 @@ def _backend_answer_output_instruction(output_mode: str) -> str:
     )
 
 
+SQE_FLK_DEFAULT_QUESTION_COUNT = 20
+SQE_SAMPLE_FILENAMES_BY_STAGE: Dict[str, Tuple[str, ...]] = {
+    "flk1": ("sqe1-flk1-sample-questions-updated-01-april-25.pdf",),
+    "flk2": ("sqe1-flk2-sample-questions.pdf",),
+    "sqe1": (
+        "sqe1-flk1-sample-questions-updated-01-april-25.pdf",
+        "sqe1-flk2-sample-questions.pdf",
+    ),
+    "sqe2": (
+        "sqe2-sample-question-legal-writing-(business).pdf",
+        "sqe2-sample-question-legal-writing-prop-dec-25.pdf",
+        "PERFORMANCE INDICATORS FOR SQE2 LEGAL RESEARCH ASSESSMENT.pdf",
+    ),
+}
+SQE_STAGE_LABELS: Dict[str, str] = {
+    "flk1": "SQE1 FLK1",
+    "flk2": "SQE1 FLK2",
+    "sqe1": "SQE1",
+    "sqe2": "SQE2",
+}
+SQE_STAGE_SCOPES: Dict[str, str] = {
+    "flk1": "Business Law and Practice; Dispute Resolution; Contract; Tort; Legal System/Public Law; Legal Services and professional conduct.",
+    "flk2": "Property Practice; Wills and Administration of Estates; Solicitors' Accounts; Land Law; Trusts; Criminal Law and Practice.",
+    "sqe1": "FLK1 and/or FLK2 as requested, using SQE1 single-best-answer style.",
+    "sqe2": "SQE2 practical skills across legal writing, drafting, case and matter analysis, legal research, advocacy, interview/attendance note, and the practice areas requested.",
+}
+
+SQE2_WRITTEN_PRACTICE_AREAS: Tuple[str, ...] = (
+    "Business organisations, rules and procedures",
+    "Dispute Resolution",
+    "Criminal Litigation",
+    "Property Practice",
+    "Wills and Intestacy, Probate Administration and Practice",
+)
+
+SQE2_WRITTEN_SKILL_GUIDES: Dict[str, Dict[str, Any]] = {
+    "case_matter_analysis": {
+        "label": "Case and matter analysis",
+        "time": "60 minutes",
+        "output": "Written report/note to a partner giving legal analysis of the case and client-focused advice.",
+        "aliases": ("case and matter analysis", "case matter analysis", "cma", "matter analysis", "case analysis"),
+        "criteria": (
+            "Identify relevant facts.",
+            "Provide client-focused advice, addressing the client’s objectives and practical position.",
+            "Use clear, precise, concise and acceptable language.",
+            "Apply the law correctly to the client’s situation.",
+            "Apply the law comprehensively, including ethics/professional conduct where relevant.",
+        ),
+        "answer_shape": (
+            "To / Re line; short issue map; relevant facts; legal analysis applied to facts; risks/options; "
+            "ethics if present; advice and next steps."
+        ),
+    },
+    "legal_research": {
+        "label": "Legal research",
+        "time": "60 minutes",
+        "output": "Research note/report to a partner explaining legal reasoning, key sources relied on, and advice to be given.",
+        "aliases": ("legal research", "research note", "research assessment", "research report"),
+        "criteria": (
+            "Identify and use relevant sources and information.",
+            "Provide advice which is client-focused and addresses the client’s problem.",
+            "Use clear, precise, concise and acceptable language.",
+            "Apply the law correctly to the client’s situation.",
+            "Apply the law comprehensively, including ethics/professional conduct where relevant.",
+        ),
+        "answer_shape": (
+            "Issue; short answer; relevant sources only; source-backed legal reasoning; application to client; "
+            "advice; risks/uncertainties; next steps."
+        ),
+        "performance_indicators": (
+            "Select relevant primary/secondary sources, extract the material rule/provision, and use findings to support the answer. "
+            "Avoid dumping irrelevant sources or failing to distinguish relevant from irrelevant material."
+        ),
+    },
+    "legal_writing": {
+        "label": "Legal writing",
+        "time": "30 minutes",
+        "output": "Letter or email to a client, third party, opponent, or partner, using audience-appropriate language.",
+        "aliases": ("legal writing", "writing", "client letter", "letter", "email"),
+        "criteria": (
+            "Include relevant facts.",
+            "Use a logical structure.",
+            "Make advice/content client and recipient focused.",
+            "Use clear, precise, concise and acceptable language appropriate to the recipient.",
+            "Apply the law correctly to the client’s situation.",
+            "Apply the law comprehensively, including ethics/professional conduct where relevant.",
+        ),
+        "answer_shape": (
+            "Subject/opening; plain-English issue explanation; applied advice; options/consequences; "
+            "specific next steps; professional closing."
+        ),
+    },
+    "legal_drafting": {
+        "label": "Legal drafting",
+        "time": "45 minutes",
+        "output": "Draft or amend a legal document, or part of one, for the client’s matter.",
+        "aliases": ("legal drafting", "drafting", "draft", "amend a document", "draft document"),
+        "criteria": (
+            "Use clear, precise, concise and acceptable language.",
+            "Structure the document appropriately and logically.",
+            "Draft a document which is legally correct.",
+            "Draft a document which is legally comprehensive, including ethics/professional conduct where relevant.",
+        ),
+        "answer_shape": (
+            "Use the requested document form; include operative clauses/pleading sections only where needed; "
+            "avoid advice prose unless the task asks for it; ensure legal effect and completeness."
+        ),
+    },
+}
+
+SQE2_MARKING_SCALE: Tuple[Tuple[str, int, str], ...] = (
+    ("A", 5, "Superior performance: well above the competency requirements of the assessment."),
+    ("B", 4, "Clearly satisfactory: clearly meets the competency requirements of the assessment."),
+    ("C", 3, "Marginal pass: on balance, just meets the competency requirements of the assessment."),
+    ("D", 2, "Marginal fail: on balance, just fails to meet the competency requirements of the assessment."),
+    ("E", 1, "Clearly unsatisfactory: clearly does not meet the competency requirements of the assessment."),
+    ("F", 0, "Poor performance: well below the competency requirements of the assessment."),
+)
+
+
+def normalize_sqe_exam_stage(exam_stage: Optional[str] = None, enquiry: str = "") -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "", (exam_stage or "").lower())
+    if normalized in {"flk1", "flk2", "sqe1", "sqe2"}:
+        return normalized
+    raw = (enquiry or "").lower()
+    if re.search(r"\b(?:sqe\s*2|sqe2)\b", raw):
+        return "sqe2"
+    if re.search(r"\b(?:flk\s*2|flk2)\b", raw):
+        return "flk2"
+    if re.search(r"\b(?:flk\s*1|flk1)\b", raw):
+        return "flk1"
+    if re.search(r"\b(?:sqe\s*1|sqe1)\b", raw):
+        return "sqe1"
+    return "sqe1"
+
+
+def _extract_backend_sqe_set_number(enquiry: str) -> Optional[int]:
+    raw = str(enquiry or "")
+    patterns = [
+        r"(?i)\bset\s*(?:no\.?|number|#)?\s*(\d{1,3})(?!\s*(?:questions?|mcqs?|sbas?|single[- ]best))\b",
+        r"(?i)\bquestion\s*set\s*(?:no\.?|number|#)?\s*(\d{1,3})(?!\s*(?:questions?|mcqs?|sbas?|single[- ]best))\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if match:
+            try:
+                value = int(match.group(1))
+            except Exception:
+                value = 0
+            if 1 <= value <= 999:
+                return value
+    return None
+
+
+def _extract_backend_sqe_question_count(enquiry: str) -> Optional[int]:
+    raw = str(enquiry or "")
+    if not raw.strip():
+        return None
+    set_number = _extract_backend_sqe_set_number(raw)
+    patterns = [
+        r"(?i)\b(\d{1,3})\s*(?:mcq|mcqs|multiple[- ]choice questions?|single[- ]best[- ]answer questions?|sba questions?|questions?|tasks?)\b",
+        r"(?i)\b(?:generate|create|draft|write|give|make|prepare|produce)\s+(\d{1,3})\s*(?:mcq|mcqs|multiple[- ]choice questions?|single[- ]best[- ]answer questions?|sba questions?|questions?|tasks?)\b",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, raw):
+            try:
+                value = int(match.group(1))
+            except Exception:
+                value = 0
+            if set_number and value == set_number:
+                prefix = raw[max(0, match.start() - 18):match.start()].lower()
+                if re.search(r"\b(?:set|question\s+set)\s*(?:no\.?|number|#)?\s*$", prefix):
+                    continue
+            if 1 <= value <= 250:
+                return value
+    return None
+
+
+def normalize_sqe2_written_skill(skill: Optional[str] = None, enquiry: str = "") -> str:
+    raw = f"{skill or ''} {enquiry or ''}".lower()
+    for key, guide in SQE2_WRITTEN_SKILL_GUIDES.items():
+        for alias in guide.get("aliases", ()):
+            if alias and alias in raw:
+                return key
+    if "particulars of claim" in raw or "witness statement" in raw or "contract clause" in raw:
+        return "legal_drafting"
+    if "letter" in raw or "email" in raw or "write to the client" in raw:
+        return "legal_writing"
+    if "source" in raw or "research" in raw:
+        return "legal_research"
+    return "case_matter_analysis"
+
+
+def _sqe2_written_skill_table() -> str:
+    lines = [
+        "Written SQE2 verified structure:",
+        "- SQE2 has 12 written stations over three half-days.",
+        "- Each written day contains one case/matter analysis, one legal drafting, one legal research, and one legal writing assessment.",
+        "- Across the 12 written stations, each of those four written skills appears three times.",
+        "- Practice-area distribution: two exercises each in Dispute Resolution, Criminal Litigation, Property Practice, and Wills/Probate, plus all Business Organisations written assessments.",
+        "",
+        "Written skills:",
+    ]
+    for key in ("case_matter_analysis", "legal_research", "legal_writing", "legal_drafting"):
+        guide = SQE2_WRITTEN_SKILL_GUIDES[key]
+        lines.append(f"- {guide['label']}: {guide['time']}; output: {guide['output']}")
+    lines.append("")
+    lines.append("Practice areas:")
+    lines.extend(f"- {area}" for area in SQE2_WRITTEN_PRACTICE_AREAS)
+    return "\n".join(lines)
+
+
+def build_sqe2_written_guide_prompt(
+    enquiry: str = "",
+    *,
+    skill: Optional[str] = None,
+    practice_area: Optional[str] = None,
+) -> str:
+    selected_skill = normalize_sqe2_written_skill(skill, enquiry)
+    guide = SQE2_WRITTEN_SKILL_GUIDES[selected_skill]
+    criteria = "\n".join(f"{idx}. {item}" for idx, item in enumerate(guide["criteria"], start=1))
+    return "\n".join([
+        "[BACKEND SQE2 WRITTEN-SKILLS GUIDE]",
+        "Output route: chat/API response body only.",
+        _sqe2_written_skill_table(),
+        "",
+        f"Selected skill: {guide['label']}",
+        f"Timing: {guide['time']}",
+        f"Expected output: {guide['output']}",
+        f"Practice area focus: {practice_area or 'follow the user enquiry'}",
+        f"Answer shape: {guide['answer_shape']}",
+        "",
+        "Assessment criteria for this skill:",
+        criteria,
+        "",
+        "Guidance to give the user:",
+        "- Explain how to structure the answer under exam time pressure.",
+        "- Explain what earns marks under skills and application of law.",
+        "- Emphasise client/recipient focus, applied advice, relevant facts only, ethics where relevant, and practical next steps.",
+        "- For legal research, require selective use of provided sources and key source citation; do not reward irrelevant source-dumping.",
+        "- Make clear this is preparation guidance, not a prediction of future SQE2 content.",
+        f"User enquiry: {str(enquiry or '').strip()}",
+    ]).strip()
+
+
+def _sqe2_marking_scale_text() -> str:
+    return "\n".join(f"- {letter} = {score}: {description}" for letter, score, description in SQE2_MARKING_SCALE)
+
+
+def build_sqe2_marking_prompt(
+    *,
+    question: str,
+    candidate_answer: str,
+    skill: Optional[str] = None,
+    practice_area: Optional[str] = None,
+    enquiry: str = "",
+) -> str:
+    """
+    Build a prompt for SQE2 written-answer marking against the official-style
+    skill criteria and A-F global-judgment scale.
+    """
+    combined = "\n".join([enquiry or "", question or "", candidate_answer or ""])
+    selected_skill = normalize_sqe2_written_skill(skill, combined)
+    guide = SQE2_WRITTEN_SKILL_GUIDES[selected_skill]
+    criteria = "\n".join(f"{idx}. {item}" for idx, item in enumerate(guide["criteria"], start=1))
+    performance_note = str(guide.get("performance_indicators") or "").strip()
+    return "\n".join([
+        "[BACKEND SQE2 WRITTEN ANSWER MARKING MODE]",
+        "Output route: chat/API response body only.",
+        "This is an SQE2 written-skills marking workflow, not an essay answer and not question generation.",
+        "Use the official SQE2 written-skills criteria and the A-F global professional judgment scale. Do not pretend to issue an official SRA/Kaplan mark.",
+        "",
+        _sqe2_written_skill_table(),
+        "",
+        f"Skill to mark: {guide['label']}",
+        f"Timing assumption: {guide['time']}",
+        f"Expected output: {guide['output']}",
+        f"Practice area: {practice_area or 'infer from the question'}",
+        f"Expected answer shape: {guide['answer_shape']}",
+        "",
+        "A-F scale:",
+        _sqe2_marking_scale_text(),
+        "",
+        "Criteria to mark:",
+        criteria,
+        "",
+        ("Performance-indicator emphasis: " + performance_note) if performance_note else "",
+        "",
+        "Marking output required:",
+        "1. Start with `SQE2 marking result`.",
+        "2. Give a compact table/list for each criterion: grade A-F, numerical score 0-5, evidence from the candidate answer, and what is missing.",
+        "3. Give separate `Skills subtotal`, `Application of law subtotal`, and `Overall simulated grade`.",
+        "4. Identify any ethical/professional-conduct issue missed or mishandled.",
+        "5. Explain whether the answer is likely pass-level, borderline, or below pass-level using the criteria, not generic praise.",
+        "6. Give a corrected high-scoring answer outline or model answer, but keep it proportionate to the original task and time limit.",
+        "7. For legal research, check whether the candidate used the provided sources selectively, cited key sources, and avoided irrelevant source-dumping.",
+        "8. For legal writing, check tone, recipient focus, structure, practical advice, and plain English.",
+        "9. For legal drafting, check legal effectiveness, operative wording, completeness, and document structure.",
+        "10. For case/matter analysis, check fact selection, risk analysis, client objectives, options, advice, and next steps.",
+        "",
+        "Question / task:",
+        str(question or "").strip(),
+        "",
+        "Candidate answer:",
+        str(candidate_answer or "").strip(),
+        "",
+        f"User enquiry/context: {str(enquiry or '').strip()}",
+    ]).strip()
+
+
+def _sqe_default_sample_pdf_candidates(filename: str) -> List[Path]:
+    desktop = Path.home() / "Desktop"
+    return [
+        desktop / "SQE " / "Sample question sqe 1 and 2 " / filename,
+        desktop / "Law" / "Paper" / filename,
+    ]
+
+
+def _make_sqe_sample_document(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        raw = path.read_bytes()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    return {
+        "id": f"sqe-sample-{uuid.uuid5(uuid.NAMESPACE_URL, str(path.resolve()))}",
+        "type": "file",
+        "name": path.name,
+        "mimeType": "application/pdf",
+        "data": encode_file_to_base64(raw),
+        "size": len(raw),
+    }
+
+
+def build_sqe_sample_documents(
+    exam_stage: Optional[str] = None,
+    *,
+    enquiry: str = "",
+    sample_pdf_paths: Optional[List[Any]] = None,
+    include_default_samples: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Build upload-style PDF document objects for official SQE sample material.
+
+    Callers can pass exact PDF paths. When `include_default_samples` is true,
+    the helper also checks the known local Desktop sample locations and silently
+    skips missing files.
+    """
+    stage = normalize_sqe_exam_stage(exam_stage, enquiry)
+    candidate_paths: List[Path] = []
+    for raw_path in sample_pdf_paths or []:
+        if raw_path is None:
+            continue
+        try:
+            candidate_paths.append(Path(os.path.expanduser(str(raw_path))).resolve())
+        except Exception:
+            continue
+    if include_default_samples:
+        for filename in SQE_SAMPLE_FILENAMES_BY_STAGE.get(stage, ()):
+            candidate_paths.extend(_sqe_default_sample_pdf_candidates(filename))
+
+    documents: List[Dict[str, Any]] = []
+    seen: set = set()
+    seen_names: set = set()
+    for path in candidate_paths:
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+        key = str(resolved)
+        name_key = resolved.name.lower()
+        if key in seen or name_key in seen_names or not resolved.is_file():
+            continue
+        seen.add(key)
+        seen_names.add(name_key)
+        doc = _make_sqe_sample_document(resolved)
+        if doc:
+            documents.append(doc)
+    return documents
+
+
+def _sqe_enquiry_requests_answers(enquiry: str) -> bool:
+    low = (enquiry or "").lower()
+    return any(token in low for token in [
+        "with answers",
+        "answer key",
+        "show answers",
+        "include answers",
+        "with explanations",
+        "full explanations",
+        "explain each answer",
+        "model answer",
+        "marking points",
+    ])
+
+
+def _sqe2_enquiry_requests_marking(enquiry: str) -> bool:
+    low = (enquiry or "").lower()
+    return bool(
+        ("sqe2" in low or "sqe 2" in low)
+        and any(token in low for token in [
+            "mark my",
+            "mark this",
+            "mark against",
+            "grade my",
+            "assess my",
+            "feedback on my",
+            "candidate answer",
+            "my answer",
+        ])
+    )
+
+
+def build_sqe_question_set_prompt(
+    enquiry: str,
+    *,
+    exam_stage: Optional[str] = None,
+    question_count: Optional[int] = None,
+    set_number: Optional[int] = None,
+    include_answers: Optional[bool] = None,
+    focus: Optional[str] = None,
+) -> str:
+    """
+    Convert a user SQE enquiry into a backend generation prompt.
+
+    FLK1/FLK2/SQE1 requests are routed as SQE1 single-best-answer sets.
+    SQE2 requests are routed as practical task drafting, not MCQs.
+    """
+    stage = normalize_sqe_exam_stage(exam_stage, enquiry)
+    label = SQE_STAGE_LABELS.get(stage, "SQE")
+    scope = SQE_STAGE_SCOPES.get(stage, SQE_STAGE_SCOPES["sqe1"])
+    detected_set = set_number if isinstance(set_number, int) and set_number > 0 else _extract_backend_sqe_set_number(enquiry)
+    detected_count = question_count if isinstance(question_count, int) and question_count > 0 else _extract_backend_sqe_question_count(enquiry)
+    wants_answers = _sqe_enquiry_requests_answers(enquiry) if include_answers is None else bool(include_answers)
+    focus_line = str(focus or "").strip()
+    answer_policy = (
+        "Include the answer key and concise explanations only because the caller requested answers."
+        if wants_answers
+        else "Do not reveal answers, answer key, model answers, or explanations; this is for chat-based testing."
+    )
+
+    if stage == "sqe2":
+        count = int(detected_count or 1)
+        set_line = f"Set number: {detected_set}" if detected_set else "Set number: not specified"
+        selected_skill = normalize_sqe2_written_skill(None, enquiry)
+        skill_guide = SQE2_WRITTEN_SKILL_GUIDES[selected_skill]
+        skill_criteria = "\n".join(f"- {item}" for item in skill_guide["criteria"])
+        verified_structure = _sqe2_written_skill_table()
+        return "\n".join([
+            "[BACKEND SQE2 PRACTICAL TASK GENERATION]",
+            "Output route: chat/API response body only.",
+            f"Exam track: {label}",
+            set_line,
+            f"Task count: exactly {count}",
+            f"Scope: {scope}",
+            f"Selected written skill: {skill_guide['label']}",
+            f"Skill timing: {skill_guide['time']}",
+            f"Expected candidate output: {skill_guide['output']}",
+            f"User enquiry: {str(enquiry or '').strip()}",
+            f"Additional focus: {focus_line or 'follow the user enquiry'}",
+            "",
+            verified_structure,
+            "",
+            "Generate SQE2 assessment-style practical task(s), not an essay and not an SQE1 objective-test set.",
+            "Use any uploaded official SQE2 sample PDFs only as style benchmarks for client-matter framing, document extracts, practical instructions, and answerable task scope. Do not copy or lightly reword the sample facts.",
+            "Make the task materially harder than the official sample by adding plausible factual ambiguity, professional-conduct pressure, timing constraints, missing-information traps, and practice-area nuance while keeping the task answerable.",
+            "Build the task around the selected written skill and its time limit. Do not mix all written skills into one task unless the user explicitly asks for a full practice day.",
+            "Assessment criteria to design against:",
+            skill_criteria,
+            "For each task, use this scaffold:",
+            "`Task N – [skill / practice area / issue]`",
+            "`Candidate instructions`",
+            "`Client/matter facts`",
+            "`Documents/extracts`",
+            "`Specific task`",
+            "`Assessment traps`",
+            "If answers were requested, add `Model answer / marking points`; otherwise omit all answers.",
+            answer_policy,
+            "If the user later supplies an answer, mark it criterion-by-criterion using the SQE2 written-skills A-F scale rather than generic comments.",
+            "Keep the output clean: no Part I essay scaffold, no bibliography, no citations unless expressly requested.",
+        ]).strip()
+
+    count = int(detected_count or SQE_FLK_DEFAULT_QUESTION_COUNT)
+    set_line = f"Set number: {detected_set}" if detected_set else "Set number: not specified"
+    header_instruction = (
+        f"Start with exactly `Set {detected_set}` on its own line, then a blank line."
+        if detected_set
+        else "Start directly with `Question 1 – ...` unless the caller supplied a set number."
+    )
+    return "\n".join([
+        "[BACKEND SQE QUESTION-SET GENERATION]",
+        "Output route: chat/API response body only.",
+        f"Exam track: {label}",
+        set_line,
+        f"Question count: exactly {count}",
+        f"Scope: {scope}",
+        f"User enquiry: {str(enquiry or '').strip()}",
+        f"Additional focus: {focus_line or 'follow the user enquiry'}",
+        "",
+        "Generate an SQE1/FLK single-best-answer question set.",
+        "Use any uploaded official SQE sample PDFs only as style benchmarks for stem cadence, option format, and assessment feel. Do not copy, paraphrase, or lightly mutate official sample questions.",
+        "Difficulty target: much harder than the official sample and harder than ordinary real SQE practice, using close legal distinctions and niche traps while preserving one clearly best answer.",
+        "Non-repeat rule: do not reuse or lightly reword any prior set visible in chat history; vary legal doctrine, facts, issue sequence, and answer position.",
+        "Coverage rule: if the user asks to cover all, plan coverage internally across the whole requested FLK; otherwise target the requested wrong answers, weak topics, niche topics, or stated focus.",
+        "Answer-option parity rule: the correct answer must not be routinely longer or more detailed than distractors. Keep A-E similar in length, syntax, specificity, and legal density.",
+        "Distractors must be plausible legal errors, not obvious throwaways. Randomise correct answer letters across the set.",
+        header_instruction,
+        "Each question must use:",
+        "`Question N – [topic / subtopic / issue]`",
+        "`Question`",
+        "`[stem]`",
+        "`A. ...` through `E. ...`",
+        answer_policy,
+        "Keep the output clean: no Part I essay scaffold, no bibliography, no citations unless expressly requested.",
+    ]).strip()
+
+
+def _merge_backend_documents(
+    documents: Optional[List[Dict[str, Any]]],
+    extra_documents: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: set = set()
+    for doc in [*(documents or []), *(extra_documents or [])]:
+        if not isinstance(doc, dict):
+            continue
+        key = (
+            str(doc.get("name") or ""),
+            str(doc.get("mimeType") or ""),
+            str(doc.get("size") or ""),
+            str(doc.get("id") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(doc)
+    return merged
+
+
+def send_sqe_question_set_with_docs(
+    api_key: str,
+    enquiry: str,
+    documents: Optional[List[Dict[str, Any]]] = None,
+    project_id: str = "sqe_question_set",
+    history: List[Dict] = None,
+    stream: bool = False,
+    provider: str = "auto",
+    model_name: Optional[str] = None,
+    exam_stage: Optional[str] = None,
+    question_count: Optional[int] = None,
+    set_number: Optional[int] = None,
+    include_answers: Optional[bool] = None,
+    focus: Optional[str] = None,
+    sample_pdf_paths: Optional[List[Any]] = None,
+    include_default_samples: bool = True,
+    output_mode: Optional[str] = BACKEND_ANSWER_OUTPUT_CHAT,
+) -> Tuple[Any, Optional[str]]:
+    """
+    Dedicated backend SQE question generation entrypoint.
+
+    It returns through the same chat/API delivery path by default and disables
+    complete-answer essay verification because generated SQE sets are not
+    Part-numbered legal essays.
+    """
+    stage = normalize_sqe_exam_stage(exam_stage, enquiry)
+    prompt = build_sqe_question_set_prompt(
+        enquiry,
+        exam_stage=stage,
+        question_count=question_count,
+        set_number=set_number,
+        include_answers=include_answers,
+        focus=focus,
+    )
+    sample_documents = build_sqe_sample_documents(
+        stage,
+        enquiry=enquiry,
+        sample_pdf_paths=sample_pdf_paths,
+        include_default_samples=include_default_samples,
+    )
+    all_documents = _merge_backend_documents(documents, sample_documents)
+    return send_complete_answer_with_docs(
+        api_key=api_key,
+        message=prompt,
+        documents=all_documents,
+        project_id=project_id,
+        history=history or [],
+        stream=stream,
+        provider=provider,
+        model_name=model_name,
+        enforce_long_response_split=False,
+        output_mode=output_mode or BACKEND_ANSWER_OUTPUT_CHAT,
+        strict_complete_answer_verification=False,
+    )
+
+
+def send_sqe_question_set_with_output(
+    api_key: str,
+    enquiry: str,
+    documents: Optional[List[Dict[str, Any]]] = None,
+    project_id: str = "sqe_question_set",
+    history: List[Dict] = None,
+    stream: bool = False,
+    provider: str = "auto",
+    model_name: Optional[str] = None,
+    exam_stage: Optional[str] = None,
+    question_count: Optional[int] = None,
+    set_number: Optional[int] = None,
+    include_answers: Optional[bool] = None,
+    focus: Optional[str] = None,
+    sample_pdf_paths: Optional[List[Any]] = None,
+    include_default_samples: bool = True,
+    output_mode: Optional[str] = BACKEND_ANSWER_OUTPUT_CHAT,
+    artifact_path: Optional[str] = None,
+) -> Tuple[Any, Optional[str], Optional[Dict[str, Any]]]:
+    """
+    SQE question-set delivery wrapper. Defaults to chat output, but preserves
+    the backend artifact route if a caller explicitly passes a file output mode.
+    """
+    stage = normalize_sqe_exam_stage(exam_stage, enquiry)
+    prompt = build_sqe_question_set_prompt(
+        enquiry,
+        exam_stage=stage,
+        question_count=question_count,
+        set_number=set_number,
+        include_answers=include_answers,
+        focus=focus,
+    )
+    sample_documents = build_sqe_sample_documents(
+        stage,
+        enquiry=enquiry,
+        sample_pdf_paths=sample_pdf_paths,
+        include_default_samples=include_default_samples,
+    )
+    all_documents = _merge_backend_documents(documents, sample_documents)
+    return send_complete_answer_with_output(
+        api_key=api_key,
+        message=prompt,
+        documents=all_documents,
+        project_id=project_id,
+        history=history or [],
+        stream=stream,
+        provider=provider,
+        model_name=model_name,
+        enforce_long_response_split=False,
+        output_mode=output_mode or BACKEND_ANSWER_OUTPUT_CHAT,
+        artifact_path=artifact_path,
+        strict_complete_answer_verification=False,
+    )
+
+
+def send_sqe2_written_guide_with_docs(
+    api_key: str,
+    enquiry: str,
+    documents: Optional[List[Dict[str, Any]]] = None,
+    project_id: str = "sqe2_written_guide",
+    history: List[Dict] = None,
+    stream: bool = False,
+    provider: str = "auto",
+    model_name: Optional[str] = None,
+    skill: Optional[str] = None,
+    practice_area: Optional[str] = None,
+    sample_pdf_paths: Optional[List[Any]] = None,
+    include_default_samples: bool = True,
+    output_mode: Optional[str] = BACKEND_ANSWER_OUTPUT_CHAT,
+) -> Tuple[Any, Optional[str]]:
+    """
+    Backend SQE2 written-skills guide path.
+
+    Produces preparation guidance grounded in the verified written assessment
+    pattern and per-skill criteria.
+    """
+    prompt = build_sqe2_written_guide_prompt(
+        enquiry,
+        skill=skill,
+        practice_area=practice_area,
+    )
+    sample_documents = build_sqe_sample_documents(
+        "sqe2",
+        enquiry=enquiry,
+        sample_pdf_paths=sample_pdf_paths,
+        include_default_samples=include_default_samples,
+    )
+    all_documents = _merge_backend_documents(documents, sample_documents)
+    return send_complete_answer_with_docs(
+        api_key=api_key,
+        message=prompt,
+        documents=all_documents,
+        project_id=project_id,
+        history=history or [],
+        stream=stream,
+        provider=provider,
+        model_name=model_name,
+        enforce_long_response_split=False,
+        output_mode=output_mode or BACKEND_ANSWER_OUTPUT_CHAT,
+        strict_complete_answer_verification=False,
+    )
+
+
+def send_sqe2_marking_with_docs(
+    api_key: str,
+    question: str,
+    candidate_answer: str,
+    documents: Optional[List[Dict[str, Any]]] = None,
+    project_id: str = "sqe2_marking",
+    history: List[Dict] = None,
+    stream: bool = False,
+    provider: str = "auto",
+    model_name: Optional[str] = None,
+    skill: Optional[str] = None,
+    practice_area: Optional[str] = None,
+    enquiry: str = "",
+    sample_pdf_paths: Optional[List[Any]] = None,
+    include_default_samples: bool = True,
+    output_mode: Optional[str] = BACKEND_ANSWER_OUTPUT_CHAT,
+) -> Tuple[Any, Optional[str]]:
+    """
+    Backend SQE2 written answer marking path.
+
+    Marks a candidate answer against the relevant SQE2 written-skill criteria
+    and asks the model for criterion-level A-F simulated feedback.
+    """
+    prompt = build_sqe2_marking_prompt(
+        question=question,
+        candidate_answer=candidate_answer,
+        skill=skill,
+        practice_area=practice_area,
+        enquiry=enquiry,
+    )
+    sample_documents = build_sqe_sample_documents(
+        "sqe2",
+        enquiry=enquiry or question,
+        sample_pdf_paths=sample_pdf_paths,
+        include_default_samples=include_default_samples,
+    )
+    all_documents = _merge_backend_documents(documents, sample_documents)
+    return send_complete_answer_with_docs(
+        api_key=api_key,
+        message=prompt,
+        documents=all_documents,
+        project_id=project_id,
+        history=history or [],
+        stream=stream,
+        provider=provider,
+        model_name=model_name,
+        enforce_long_response_split=False,
+        output_mode=output_mode or BACKEND_ANSWER_OUTPUT_CHAT,
+        strict_complete_answer_verification=False,
+    )
+
+
 def _suggest_complete_answer_artifact_stem(prompt_text: str, project_id: str = "") -> str:
     candidates: List[str] = []
     for raw_line in (prompt_text or "").splitlines():

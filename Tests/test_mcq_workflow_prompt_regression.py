@@ -64,6 +64,32 @@ Correct answer: C
     assert "Do not reuse or lightly reword questions" in generation_block
     assert "Default output for a test-only MCQ request is questions only." in generation_block
     assert "Question 1 – [topic / subtopic / issue]" in generation_block
+    assert "correct answer must not be routinely longer" in generation_block
+
+    flk_set_prompt = (
+        "Give me set 24 FLK1 using the sample style, much more difficult than real FLK1, "
+        "no repeat with previous sets 1-23, cover all topics."
+    )
+    flk_set_mode = detect_mcq_workflow_request(flk_set_prompt)
+    assert flk_set_mode["active"] is True, flk_set_mode
+    assert flk_set_mode["mode"] == "generation", flk_set_mode
+    assert flk_set_mode["set_number"] == 24, flk_set_mode
+    assert flk_set_mode["question_count"] is None, flk_set_mode
+    assert flk_set_mode["sqe_exam"] == "flk1", flk_set_mode
+    assert flk_set_mode["sample_style_requested"] is True, flk_set_mode
+    assert flk_set_mode["harder_requested"] is True, flk_set_mode
+    assert flk_set_mode["cover_all_requested"] is True, flk_set_mode
+
+    flk_set_block = _build_mcq_workflow_prompt_block(flk_set_mode, citation_style="oscola")
+    assert "Set 24" in flk_set_block
+    assert "generate exactly 20 questions" in flk_set_block.lower()
+    assert "SQE1 FLK1 scope" in flk_set_block
+    assert "official SQE sample" in flk_set_block
+    assert "Answer-option parity is mandatory" in flk_set_block
+
+    sqe2_task_prompt = "Give me an SQE2 legal writing practice task like the sample but harder."
+    sqe2_task_mode = detect_mcq_workflow_request(sqe2_task_prompt)
+    assert sqe2_task_mode["active"] is False, sqe2_task_mode
 
     print("MCQ workflow prompt regression checks passed.")
 

@@ -1,6 +1,7 @@
 from model_applicable_service import (
     _build_legal_answer_quality_gate,
     _infer_retrieval_profile,
+    _subissue_queries_for_unit,
 )
 
 
@@ -75,5 +76,38 @@ pensions_gate = _build_legal_answer_quality_gate(pensions_prompt, pensions_profi
 assert "do not assume that a pensions term means the same thing in the scheme rules merely because legislation uses similar language" in pensions_gate
 assert "rectification or declaration issues" in pensions_gate
 assert "distinguish subsisting rights, employer communication, trustee process, and remedial proof" in pensions_gate
+
+
+planning_prompt = """Planning Law - Essay Question
+
+Critically evaluate how English planning law balances the development plan, material considerations, and local authority discretion when deciding planning applications.
+
+In your answer, consider Town and Country Planning Act 1990 section 70(2), Planning and Compulsory Purchase Act 2004 section 38(6), the role of the National Planning Policy Framework, planning conditions, legitimate expectations, reasons, and judicial/statutory review of planning decisions."""
+
+planning_profile = _infer_retrieval_profile(planning_prompt)
+assert planning_profile["topic"] == "generic_planning_law"
+planning_gate = _build_legal_answer_quality_gate(planning_prompt, planning_profile).lower()
+for phrase in [
+    "tcpa 1990 section 70(2)",
+    "pcpa 2004 section 38(6)",
+    "national planning policy framework",
+    "planning conditions",
+    "legitimate expectation",
+    "reasons",
+    "judicial/statutory review",
+]:
+    assert phrase in planning_gate, f"Planning gate missing: {phrase}"
+
+planning_subqueries = " || ".join(
+    label for label, _ in _subissue_queries_for_unit("Essay Question — Planning", planning_prompt)
+).lower()
+for phrase in [
+    "development plan primacy",
+    "nppf",
+    "planning conditions",
+    "legitimate expectation",
+    "judicial/statutory review",
+]:
+    assert phrase in planning_subqueries, f"Planning subqueries missing: {phrase}"
 
 print("General supervisor-feedback guidance regression passed.")

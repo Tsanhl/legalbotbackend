@@ -115,8 +115,22 @@ assert "Shared legal backend guide anchors:" in prompt_block
 assert "same substantive standard as the local legal-review amend workflow" in prompt_block
 assert "downstream DOCX engine preserves styling and applies yellow-highlight-only markup" in prompt_block
 assert "OSCOLA bibliography format is not OSCOLA footnote format" in prompt_block
+assert "Across all citation styles, never delete a user's original footnote or endnote" in prompt_block
 assert "REVIEW/UPGRADE" not in prompt_block
 assert "Website/API rule" not in prompt_block
+
+pensions_prompt_block = _build_legal_doc_workflow_prompt_block(
+    workflow,
+    [
+        {
+            "name": "pensions_draft.docx",
+            "kind": "docx",
+            "text": "Pensions Law problem question on occupational pension scheme amendment, section 67, Barber equalisation, trustee duties and employer good faith.",
+        }
+    ],
+)
+assert "Matched subject guide anchors:" in pensions_prompt_block
+assert "[SUBJECT GUIDE — pensions_law]" in pensions_prompt_block
 
 harvard_prompt_block = _build_legal_doc_workflow_prompt_block(
     workflow,
@@ -126,6 +140,7 @@ harvard_prompt_block = _build_legal_doc_workflow_prompt_block(
 assert "Harvard author-date because the user expressly requested Harvard referencing" in harvard_prompt_block
 assert "Standard Harvard is not a footnote citation system" in harvard_prompt_block
 assert "References" in harvard_prompt_block
+assert "Across all citation styles, never delete a user's original footnote or endnote" in harvard_prompt_block
 assert "OSCOLA bibliography format is not OSCOLA footnote format" not in harvard_prompt_block
 
 with tempfile.TemporaryDirectory() as tmp_dir:
@@ -133,10 +148,12 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     source_path.write_bytes(_make_minimal_docx_bytes())
     snapshot = _snapshot_from_docx(source_path)
     amend_prompt = _build_structured_amend_prompt(
-        "Please amend this based on comments and keep my style.",
+        "Please amend this based on comments and keep my style. Pensions Law issue: section 67 occupational pension scheme amendment and Barber equalisation.",
         snapshot,
     )
     assert "follow the backend legal guidance in `model_applicable_service.py` together with `LEGAL_DOC_GUIDE.md`" in amend_prompt
+    assert "Matched subject guide anchors:" in amend_prompt
+    assert "[SUBJECT GUIDE — pensions_law]" in amend_prompt
     assert "the user's original DOCX is read-only. Never overwrite the original source file path." in amend_prompt
     assert "implemented amendment markup is yellow highlight only." in amend_prompt
     assert "final amend delivery is one protected amended DOCX saved directly in Desktop root." in amend_prompt
@@ -168,6 +185,8 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     assert "do not over-plead self-preferencing or discrimination" in amend_prompt
     assert "keep OSCOLA bibliography format separate from OSCOLA footnote format" in amend_prompt
     assert "invert them to `Surname Initial,`" in amend_prompt
+    assert "across all citation styles, never delete a user's original footnote or endnote" in amend_prompt
+    assert "If extra support is needed and no existing note should be corrected, add the authority inline immediately after the relevant sentence in the active citation style instead." in amend_prompt
     assert "`authority_verification_report` and `sentence_support_report` are always required" in amend_prompt
     assert "\"authority_verification_report\"" in amend_prompt
     assert "\"sentence_support_report\"" in amend_prompt

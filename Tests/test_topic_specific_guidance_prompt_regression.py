@@ -184,6 +184,54 @@ Advise on accrued rights, amendment powers, trustee and employer duties, mislead
             "Keep amendment power, proper purpose, and good-faith/rationality review separate from section 67 subsisting-rights analysis; one route may do real work before the other is reached.",
         ],
     },
+    {
+        "name": "law_medicine_ethics",
+        "prompt": """Law and Medicine - Essay Question
+
+Critically examine whether the right to determine what shall be done with or to one's body is a fundamental right in English medical law. In your answer, consider medical ethics, bodily autonomy, dignity as empowerment, dignity as constraint, utilitarian, duty-based and rights-based arguments, and focused examples from the module syllabus.""",
+        "expected_topic": "medical_ethics",
+        "expected_header": "[TOPIC-SPECIFIC GUIDANCE — LAW AND MEDICINE (MEDICAL ETHICS)]",
+        "snippets": [
+            "Default mode is COURSE-BOUND for Law and Medicine answers",
+            "For autonomy essays, use two or three focused syllabus examples only",
+        ],
+    },
+    {
+        "name": "law_medicine_transplantation",
+        "prompt": """Law and Medicine - Essay Question
+
+Make the case for reforming one or more aspects of the law on transplantation. In your answer, consider the Human Tissue Act 2004, appropriate consent, deemed consent, living donors, deceased donors, directed donation, conditional donation, requested allocation, and section 32 commercialisation.""",
+        "expected_topic": "medical_transplantation_hta2004",
+        "expected_header": "[TOPIC-SPECIFIC GUIDANCE — LAW AND MEDICINE (TRANSPLANTATION)]",
+        "snippets": [
+            "For deceased donation, apply the section 3 hierarchy",
+            "Do not say all directed donation is rejected",
+        ],
+    },
+    {
+        "name": "law_medicine_abortion",
+        "prompt": """Law and Medicine - Essay Question
+
+Critically examine the view that abortion on grounds of fetal abnormality is in need of legislative reform. In your answer, consider the Offences Against the Person Act 1861, the Infant Life (Preservation) Act 1929, the Abortion Act 1967, section 1(1)(a), section 1(1)(d), Crowter, Jepson, and disability-discrimination objections.""",
+        "expected_topic": "medical_abortion_aa1967",
+        "expected_header": "[TOPIC-SPECIFIC GUIDANCE — LAW AND MEDICINE (ABORTION)]",
+        "snippets": [
+            "Start with OAPA 1861 / ILPA 1929 criminalisation",
+            "Keep section 1(1)(a) social ground separate from section 1(1)(d) fetal-abnormality ground.",
+        ],
+    },
+    {
+        "name": "law_medicine_reproductive",
+        "prompt": """Law and Medicine - Essay Question
+
+Critically examine whether the Human Fertilisation and Embryology Act 1990 is unfit for governing assisted reproduction. In your answer, consider HFEA licensing, IVF, Schedule 3 consent, section 13(5) welfare of the child, legal parenthood, PGT, saviour siblings, and embryo research.""",
+        "expected_topic": "medical_reproductive_hfea",
+        "expected_header": "[TOPIC-SPECIFIC GUIDANCE — LAW AND MEDICINE (REPRODUCTIVE MEDICINE)]",
+        "snippets": [
+            "Start with the HFEA 1990/2008 regulatory scheme",
+            "Separate consent to embryo/gamete use, welfare-of-child screening under section 13(5), legal parenthood, PGT, saviour siblings, and embryo research.",
+        ],
+    },
 ]
 
 

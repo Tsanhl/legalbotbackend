@@ -4393,7 +4393,12 @@ def _essay_quality_issues(
                 f"Over-relies on a single authority ({repeated_case_display.get(rep_key, rep_key)}) instead of using a balanced spread of sources."
             )
 
-    citation_count = sum(1 for _ in _iter_inline_authority_parentheticals(txt))
+    citation_density_text = "\n".join(
+        line
+        for line in txt.splitlines()
+        if not re.match(r"(?im)^\s*(?:Question\s+\d+|Part\s+[IVXLCDM0-9]+|Title)\s*:", line)
+    )
+    citation_count = sum(1 for _ in _iter_inline_authority_parentheticals(citation_density_text))
     actual_words_now = _count_words(txt)
     min_citations = 0
     if actual_words_now >= 1800:

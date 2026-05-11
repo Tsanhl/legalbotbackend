@@ -54,10 +54,60 @@ Use one main agent (orchestrator) plus specialist sub-agents run sequentially. E
 - For legal answer-generation and amend/review generation, the backend must trigger this indexed retrieval layer automatically before drafting. Do not treat RAG as optional for those requests.
 - For amend/review requests, treat the uploaded draft as a **primary working document** and compare it against the indexed corpus to identify what can be added, corrected, strengthened, verified, or cut.
 - If indexed coverage is thin, outdated, or missing a needed authority, use **online search as a second layer** to verify or supplement the answer. Search is for verification and gap-filling, not for padding or speculative citation.
+- **Backend online-search fallback rule.** When indexed coverage is thin/outdated/missing authority, the backend must try online search for all answer-production and amend/review providers. No provider API is required when the local Codex backend is available: Codex may use its own web-search capability alongside RAG. Gemini may use native Google Search grounding; OpenAI/Anthropic/xAI paths use the shared backend online-search context when a search provider is configured. If no online-search path returns results, do not claim online verification was performed; stay within verified retrieved/uploaded materials and use calibrated wording.
 - When online search is used, prefer **primary and official sources first** (courts, legislation databases, official guidance, publishers with authoritative metadata), then high-quality secondary commentary if needed.
 - Recent-law / current-awareness trigger: if the issue may have changed recently (new case, new statute, new consultation, current enforcement position, recent academic debate), perform a targeted verification search before treating the proposition as settled.
 - RAG + search must be used to test whether the draft is missing: newer authority, a better leading case, a stronger statutory hook, a stronger counterargument, a rebuttal, a more precise remedy point, or a better academic dispute.
 - Never carry unverified search results straight into the final answer. Added material must be checked for existence, relevance, and metadata accuracy before it is treated as established authority.
+
+## Subject Guide Index
+
+- **Split subject guides:** detailed subject/topic rules live in `legal_doc_tools/law_guides/`. The backend should load the matching subject guide for legal answer and amend/review work instead of injecting every subject into every prompt.
+- **Source priority:** course outlines, lecture slides, tutorial materials, exam guidance, and anonymised feedback rules control the subject guide first; indexed textbooks, cases, statutes, and journals supplement them.
+- **Privacy rule:** subject guides must not store personal identifiers, institution identifiers, raw local paths, private filenames, or marker wording. Convert course/feedback material into paraphrased reusable rules.
+- **Case-brief rule:** case briefs must be short paraphrases: facts, held, reasoning, and answer use. Do not copy long passages from cases, slides, textbooks, or feedback.
+- **Guide-selection rule:** if a prompt matches a subject guide, use that guide plus RAG/search; if no subject guide matches, fall back to the universal rules in this file.
+
+## Law & Medicine Course Guide
+
+### Default source mode
+
+- **Course-bound mode is the default** for Law & Medicine tasks unless the user expressly says `no syllabus limit`, `broad-all`, `broad all`, `broad research`, or equivalent.
+- **Course-bound scope:** medical ethics, consent to/refusal of medical intervention, end-of-life decisions, transplantation, abortion, and reproductive medicine.
+- **Shared technique:** course-bound and broad-all answers use the same high-standard method: precise legal route, defined terms, thesis, focused examples, verified authorities, counterarguments, and section-end mini-verdicts.
+- **Broad-all mode:** broader English medical-law sources and current developments may be used, but distinguish course-core material from wider additions and verify all wider/current material before relying on it.
+- **Do not drift in course-bound mode:** avoid clinical negligence, mental health law, deprivation of liberty safeguards, public health law, neuro-interventions, speculative property-rights-in-body debates, US law, or surrogacy unless the prompt expressly requires them.
+- **No-limitation clarification:** the course-bound exclusions do not apply when the user expressly asks for no syllabus limit / broad-all, but the answer must still stay tied to the question and explain which wider material goes beyond the module.
+
+### Exam-answer method
+
+- **Format:** the exam is one compulsory problem question plus one essay question, with a 3,500-word total limit. Use compact, issue-led drafting.
+- **Exam citation style:** use in-text case names, statutory provisions, and named academics. Do not use footnotes/bibliography unless the user requests a non-exam essay format.
+- **Essay introductions:** define key terms early, identify the selected examples, state the thesis/opinion defended, and preview the structure. Avoid introductions that only list cases.
+- **Model-introduction learning rule:** if the user provides a good introduction, extract only the technique: legal field/statutory scheme, disputed rule, thesis, and roadmap. Do not copy the phrasing, sentence sequence, or distinctive wording.
+- **Reform-introduction rule:** for reform essays, name the exact reform target in the introduction: statutory ground, time limit, approval mechanism, consent rule, professional discretion, allocation policy, or offence.
+- **Essay bodies:** answer the question set, not the question preferred. Use 2-3 focused examples for broad autonomy/ethics essays, develop counterarguments, and end sections with a mini-verdict.
+- **Problem answers:** for each person/patient, identify the decision, decision-maker, legal route, statutory test, leading authority, and practical outcome or court step.
+- **Feedback rule:** do not over-cover. A narrower answer with fully articulated analysis is stronger than a broad survey of every syllabus topic.
+
+### Topic structures
+
+- **Medical ethics:** define autonomy, dignity, sanctity of life, utilitarian, duty-based, rights-based, virtue-ethics, or mixed-theory language before using it; connect theory to concrete legal rules.
+- **Consent/capacity/refusal:** keep capacity, information, voluntariness, and public-policy limits separate. In course-bound mode, do not centre Montgomery/negligence unless expressly asked; use broad awareness, Chatterton, Re T, Re B, MCA 2005, Gillick, Re W, and E v Northern Care Alliance where relevant.
+- **End of life:** separate contemporaneous refusal, advance refusal validity/applicability, MCA 2005 section 4 best interests, CANH withdrawal, requests for treatment, assisted suicide, and reform. If no formal advance decision exists, explain how past wishes matter within section 4 rather than treating them as binding substituted judgment.
+- **Transplantation:** separate deceased donation, living donation, allocation, and commercialisation. Apply HTA 2004 appropriate consent, the deceased-donor hierarchy, deemed consent, living-donor section 33 approval, conditional/directed donation, requested allocation, and section 32 commercialisation where relevant.
+- **Abortion:** start with the criminal background, then the Abortion Act 1967 gateway. Distinguish section 1(1)(a) social ground, section 1(1)(d) fetal abnormality, two-doctor certification, good faith, Crowter/Jepson, disability-discrimination objections, decriminalisation, time limits, and information-based reforms.
+- **Reproductive medicine:** start with the HFEA 1990/2008 regulatory scheme and HFEA licensing role. Separate Schedule 3 consent, section 13(5) welfare-of-child screening, legal parenthood, donor anonymity, PGT, sex selection, saviour siblings, embryo research, moral status, and medicalisation critique.
+
+### Formative-feedback rules
+
+- **Syllabus discipline:** if the question says `within the module syllabus`, stay strictly within the six taught topics.
+- **Depth over breadth:** do not attempt every possible topic in a 2,000-word formative or 3,500-word exam answer.
+- **Adult refusal/capacity:** distinguish capacity, voluntariness, and information; use Re T, Re B, Re C, Re W (2002), A Local Authority v JB, and pregnancy/refusal cases only where they perform a clear analytical job.
+- **Children:** if relying on Re W, also consider E v Northern Care Alliance because it expressly follows/supports Re W.
+- **Best interests:** when contrasting best interests and substituted judgment, analyse how far past wishes can be respected where there is no formal advance decision under MCA 2005 sections 24-26.
+- **Transplantation reform:** focus commercialisation on HTA 2004 section 32 and avoid broad body-property analysis unless requested.
+- **Academic commentary:** never write vague phrases such as `academic commentary suggests` without naming and verifying the relevant author/source.
 
 ## Direct-Code And Website Execution Modes
 
@@ -112,7 +162,7 @@ Default amended variant policy: generate one amended DOCX variant only (marked: 
 - **NO NO-MARKUP EXCEPTIONS (HARD).** Do not produce unmarked/plain amended outputs. Every implemented amendment must remain yellow-highlighted.
 - **NO DIRECT IN-PLACE OUTPUT.** If any command/script would write output to the original source path, stop and reroute output to a new amended file path before execution.
 - **RUNTIME PATH-EQUALITY BLOCK (HARD).** Treat `output == original source path` as a hard error. Do not bypass; output must always be a new file path.
-- **Protected Desktop-output rule.** Never overwrite the user's original source DOCX, and do not silently overwrite a prior final amended Desktop DOCX either. Use the canonical Desktop final filename first, then allocate `_v2`, `_v3`, and so on for later amend runs.
+- **Protected Desktop-output rule.** Never overwrite the user's original source DOCX. Use the canonical Desktop final filename first, then allocate a versioned final path if needed during the run. Do not delete earlier Desktop DOCX outputs automatically; preserve user-visible versions unless the user explicitly asks to remove them.
 - **Zero tolerance for introduced errors.** Every correction must improve the original — never introduce new mistakes.
 - **Comment-first + beyond-comments rule is mandatory.** When the user requests `review` or `amend` "based on comments", resolve every DOCX/inline comment first, then perform a second independent pass to identify and fix further improvements not mentioned in comments.
 - **Comment coverage evidence is mandatory for comment-based requests.** The verification ledger/report must include `Comments Unresolved: 0`, `DOCX Comment N:` entries for all Word comment-function comments, and `Inline Comment N:` entries for all inline written comments detected.
@@ -124,6 +174,10 @@ Default amended variant policy: generate one amended DOCX variant only (marked: 
 - **Marker-feedback repetition handling is mandatory.** If a marker comment says a point has already been made, do not merely trim both versions. Remove the earlier or weaker instance and keep the stronger formulation in the paragraph that actually performs the analytical work, usually as that paragraph's topic sentence.
 - **Feedback abstraction and privacy rule is mandatory.** When a user/reviewer comment exposes a drafting flaw, abstract it into a reusable general rule (for example precision, explicit comparator naming, heading specificity, local-style parity, section placement, or anti-vagueness discipline), apply that rule across the whole current document and future similar tasks, and keep only the abstract lesson. Do not retain, surface, or hardcode document-specific facts, names, quotations, authority strings, or other confidential content as reusable defaults.
 - **Feedback-led anti-vagueness sweep is mandatory.** If feedback shows that a sentence, heading, or transition is vague, sweep the whole document for analogous vagueness and replace shorthand with explicit doctrine, comparator, mechanism, actor, and consequence instead of patching only the flagged line.
+- **Supervisor/module-feedback learning rule is mandatory.** Treat formative feedback, summative feedback, and marked-solution (`MS`) files as quality-control evidence. Abstract recurring flaws into topic or general drafting rules, then apply those rules to future outputs without copying private facts or marker wording into reusable defaults.
+- **Authority hierarchy and pinpoint discipline are mandatory.** Prefer binding and directly on-point authority, explain why each authority matters, check that it has not been overtaken, and use paragraph/page pinpoints only where verified for the exact proposition. Do not copy pinpoints from secondary sources without rechecking them.
+- **Assumption and calculation discipline is mandatory.** Where a problem question turns on missing facts, eligibility thresholds, dates, arithmetic, statutory commencement, or scheme wording, state the reasonable assumption and run the calculation or consequence explicitly instead of hiding it in prose.
+- **Question-map coverage is mandatory.** Every express limb in the prompt must be visible in the structure or analysis. If a prompt lists statutes, policy instruments, reasons, remedies, or review routes, cover each distinctly and do not let a broad public-law or policy discussion swallow the narrower required issue.
 - **Implicit-question clarity rule is mandatory.** If a sentence could invite questions such as `Compared with what?`, `From what?`, `Harmed how?`, `With what effect?`, `Protection from what?`, `Immunity from what?`, or `Which are what?`, answer that explicitly in the same sentence or the next one. Do not leave the operative comparator, mechanism, object, or consequence implicit.
 - **Comparative and superlative claims must be quantified or calibrated.** Do not use absolutes or superlatives such as `highest`, `most`, `uniquely`, `always`, or `virtually impossible` unless the verified source really supports that level. Otherwise quantify the comparison or reframe it in calibrated terms.
 - **Measured-register rule is mandatory.** Prefer controlled academic/legal register over bombastic phrasing. Avoid loaded adjectives such as `catastrophic`, `devastating`, `seismic`, or similarly inflated descriptors unless the source-backed analysis genuinely warrants them.
@@ -159,9 +213,9 @@ Default amended variant policy: generate one amended DOCX variant only (marked: 
 - **Paragraph property inheritance is mandatory.** For inserted/amended lines, clone paragraph properties (`style`, line spacing, space before/after, indents, alignment) from adjacent unchanged paragraphs in the same section. Never leave inserted lines with default/blank paragraph properties when neighbors use explicit settings.
 - **Never normalise the user's line spacing.** If the original paragraph uses 1.5-line spacing, keep 1.5-line spacing. If the original paragraph uses double spacing, keep double spacing. Match the user’s exact local paragraph spacing rather than applying a global house style.
 - **No formatting mutations are allowed.** Improve content only. Do not change any existing formatting attribute (font, size, colour, italics, underline, spacing, alignment, indentation, list formatting, page layout, headers/footers, tables, captions, or styles). Only permitted formatting change: for implemented amendments, apply **yellow highlight** to changed/added wording only.
-- **Desktop-root output hard rule (runtime-enforced).** For legal review workflows, every final artifact (`review_report.docx` and/or amended DOCX) must be saved directly in the user Desktop root (`/Users/hltsang/Desktop`) and never inside subfolders.
+- **Desktop-root output hard rule (runtime-enforced).** For legal review workflows, every final artifact (`review_report.docx` and/or amended DOCX) must be saved directly in the user Desktop root (`~/Desktop`) and never inside subfolders.
 - **No output subfolders.** Do not create or use nested output folders for final artifacts.
-- **Workspace-output prohibition.** Never deliver final artifacts inside `/Users/hltsang/Desktop/Skills`.
+- **Workspace-output prohibition.** Never deliver final artifacts inside Desktop subfolders such as `~/Desktop/Skills`.
 - **Path disambiguation is mandatory.** If similarly named DOCX files exist in multiple Desktop folders, resolve and use the exact user-intended absolute path before editing. Do not assume Desktop root when an active project subfolder contains the target file.
 - **Non-destructive amendment workflow is mandatory.** Never directly amend the user’s source DOCX file in place. First create a copy, apply amendments to that copy, and deliver a new output DOCX.
 - **Word count compliance.** Keep the amended output near the user-requested target or declared word limit for the whole essay.
@@ -194,6 +248,7 @@ Default amended variant policy: generate one amended DOCX variant only (marked: 
 - **Live footnote numbering integrity is mandatory.** Preserve the user's real Word footnote markers/IDs; do not delete, renumber, or break them. However, textual cross-references such as `(n 12)` must be corrected whenever the cited note number is wrong or stale, and updated to the latest accurate footnote number.
 - **Relevant-and-correct original footnotes must be preserved.** Do not delete or rewrite a user’s original footnote if it remains relevant and accurate. Only change an original footnote when there is a concrete correction reason, and record that change explicitly.
 - **Accurate original footnotes are default-preserve.** If the user’s existing footnote text is already accurate and compliant enough for the active footnote style, leave it exactly as it is. Do not restyle, expand, or convert it merely for cosmetic consistency.
+- **Universal footnote preservation rule across all reference styles.** Never delete a user's original footnote or endnote merely to tidy, restyle, or convert the referencing system. Correct an existing note only when accuracy, relevance, or the user's explicit instruction requires it. If extra support is needed and no existing note should be corrected, add that support inline in the active citation style immediately after the relevant sentence instead.
 - **Reference-presentation preservation is mandatory.** If the user’s document uses Word footnotes/endnotes, preserve the existing live footnotes/endnotes and amend their text or placement where needed, but do not add brand-new Word footnotes by default in DOCX amend workflows. If an amended sentence needs extra support beyond the existing notes, place that added authority in inline parentheses `(...)` immediately after the relevant sentence instead, because newly inserted DOCX footnotes may render empty in this workflow. If the user’s document already uses inline parenthetical references in `(...)`, preserve that system and add support in `(...)` after the relevant sentence. Only switch presentation style if the user explicitly requests it.
 - **Footnote marker position integrity (hard rule).** In every footnote/endnote paragraph, keep the Word footnote number/reference marker at the start; all amended wording must appear after that marker.
 - **No `ibid.37` order errors (hard rule).** Never place amended wording before the footnote number marker. Enforce number-first rendering (for example, `37 ibid.` not `ibid.37`).
@@ -215,17 +270,18 @@ Default amended variant policy: generate one amended DOCX variant only (marked: 
 - **Verification-ledger gate input is mandatory for amend modes.** For `amend` and `review + amend`, provide a verification ledger to the gate script; it must include a numeric `Unverified` summary and `Footnote N:` entries covering all original footnotes.
 - **Internal markdown artifacts are non-deliverables by default.** Files such as `*_verification_ledger.md` (for example `Test_verification_ledger.md`) and any other intermediate `*.md` notes are runtime/internal artifacts only and must not be shown or listed to the user unless the user explicitly requests them.
 - **Temporary task-artifact cleanup is mandatory.** Any temporary, amend-specific artifact created only for a single run (for example transient JSON configs, temp question/rubric files, transient context dumps, verification ledgers, or throwaway helper files in `/tmp` or `legal_doc_tools/tmp`) must be deleted automatically after a successful amend run. Keep only general reusable scripts and permanent project files.
+- **Cleanup scope limit.** Cleanup applies only to recognised temporary/task artifacts. Never delete the user's source DOCX, the newly produced final DOCX, earlier Desktop final DOCX versions, unrelated Desktop files, or any user-visible document unless the user expressly requests that deletion.
 - **Temporary helper-code cleanup is mandatory.** Any throwaway helper script or helper directory created solely to complete one amend run must be deleted automatically after a successful amend run when it is explicitly registered as a cleanup target.
 - **Doc-specific instruction/test cleanup is mandatory.** If a run creates temporary instruction files, prompt files, helper test files, or doc-specific helper code tied only to one user DOCX, register them as temporary cleanup targets and delete them automatically after the amend succeeds, even when that helper directory is outside the temp folders.
 - **Workspace deliverable cleanup is mandatory.** Do not leave behind temporary deliverable copies or draft source packs inside the project/workspace. Any task-specific `*.docx`, `*.md`, `*.txt`, `*.json`, or similar helper artifact created only to prepare one user's final output must be deleted after successful completion unless the user explicitly asks to keep it.
 - **Desktop-DOCX-only final-output rule is mandatory for temporary document jobs.** When a task's intended deliverable is a final DOCX, keep the final deliverable as the Desktop DOCX only. Do not retain note-source markdown, transient render scripts, or duplicate workspace DOCX copies once the final DOCX has been produced successfully.
 - **No question-specific hardcoding in permanent workflow code.** Do not leave behind reusable-code changes that are specific to one essay, one coursework question, one problem question, one student file, one case list, one source pack, or one benchmark. Any such task-specific helper logic must live only in a recognised temporary runtime location and must be auto-deleted after the run.
 - **Source-specific prompt/rule cleanup is mandatory.** If a run requires custom instructions tied only to a single document or benchmark, keep them in transient runtime context or a temporary artifact; do not persist them in permanent workflow prompts, guides, or application defaults after the task completes.
-- **Protected Desktop final path is mandatory.** After a successful amend run, keep the final amended DOCX in Desktop root using the canonical filename if available, or the next protected versioned sibling (`_v2`, `_v3`, and so on) if an earlier final output already exists.
+- **Protected Desktop final path is mandatory.** After a successful amend run, keep the final amended DOCX in Desktop root. Do not prune older final-output siblings automatically; preserving user-visible DOCX versions is safer than silently deleting them.
 - **Report format when requested.** If a report is requested, produce it as DOCX by default.
 - **Amendment markup default is mandatory.** Every implemented amendment output must visibly mark changed wording in **yellow highlight** only.
 - **Amended DOCX variant default.** For amend requests, generate exactly one amended DOCX variant for that run: the marked version (yellow highlight).
-- **Single-run output policy.** For each amend run, generate one final marked DOCX and present only that run's final file path. Do not overwrite the source DOCX or a prior final amended Desktop output.
+- **Single-run output policy.** For each amend run, generate one final marked DOCX and present only that run's final file path. Do not overwrite the source DOCX and do not delete earlier Desktop DOCX outputs unless the user expressly requests cleanup.
 - **Dual-delivery scope clarification.** “Dual-delivery” means amended DOCX + review report DOCX.
 - **Explicit user requirements override defaults.** If the user gives a specific word count, citation style, exclusion, bibliography/reference instruction, delivery location, or formatting constraint, follow that instruction over generic workflow defaults unless a higher-priority rule forbids it.
 - **Citation style lock:** If the user requests a citation style, follow that style. If no style is requested, default to OSCOLA.
@@ -518,9 +574,9 @@ This pass runs **after** the review is complete and only if the user asks in ter
    - Do not add any new formatting beyond yellow highlight markup to changed wording; preserve existing local user bold/italic/underline where the source span already had it.
 6. Keep word count compliance: stay near the user-requested target or within the user-specified word limit for the whole essay; if neither is provided, remain within ±2% of original.
 7. Output location and naming:
-   - Save every final artifact directly in `/Users/hltsang/Desktop` (Desktop root only).
-   - Do not write final artifacts to `/Users/hltsang/Desktop/Skills` or any Desktop subfolder.
-   - Use the canonical final filename per source (recommended suffix: `_amended_marked_final.docx`) when available. If an earlier final output already exists, allocate the next versioned Desktop path (`_v2`, `_v3`, and so on) instead of overwriting it.
+   - Save every final artifact directly in `~/Desktop` (Desktop root only).
+   - Do not write final artifacts to `~/Desktop/Skills` or any Desktop subfolder.
+   - Use the canonical final filename per source (recommended suffix: `_amended_marked_final.docx`) when available. If a protected versioned path is needed during the run, preserve earlier successful Desktop DOCX outputs unless the user expressly asks for cleanup.
 8. Save as a new file and never overwrite the original source DOCX.
 9. Before delivery, confirm there are zero unresolved verification items (all claims/citations verified or corrected).
 10. Return the final file path/name in terminal and confirm that refinements are **yellow-highlighted** and the original font styling is preserved.
@@ -596,6 +652,6 @@ If any required file is missing, generate it first and only then return completi
 - **No word count limit on the review process.** However many words the user wrote is how many words you review and output.
 - **If the user requests a specific final word count or gives an essay word limit:** Keep the amended output near that target/limit (default tolerance about ±2% unless the user asks for stricter matching). If a maximum limit is given, do not exceed it.
 - **If the user asks to amend/implement improvements:** treat this as a request for a top-mark (10/10), professionally excellent lawyer-standard refined version, subject to strict verification and the active citation-style gate above (default OSCOLA if not requested otherwise).
-- **Desktop-root output is mandatory for amended DOCX.** Save amended outputs directly in `/Users/hltsang/Desktop` only (no subfolders, no workspace delivery).
+- **Desktop-root output is mandatory for amended DOCX.** Save amended outputs directly in `~/Desktop` only (no subfolders, no workspace delivery).
 - **General DOCX amendment rule:** inserted/amended text must visually match user local style in font and size; amendment markup must be additive only and must not alter local typography.
 - **If the DOCX contains images, tables, or charts:** Note their presence and positions but focus review on text content. Flag if any caption or label contains errors.

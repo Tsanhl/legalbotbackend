@@ -45,6 +45,7 @@ try:
         _normalize_footnote_styles_from_original,
         _normalize_downstream_footnote_citations,
         _normalize_new_footnote_citation_text,
+        _prune_output_versions,
         _normalize_to_final_output_path,
         _paragraph_is_simple,
         _paragraph_contains_effective_italics,
@@ -92,6 +93,7 @@ except ImportError:
         _normalize_footnote_styles_from_original,
         _normalize_downstream_footnote_citations,
         _normalize_new_footnote_citation_text,
+        _prune_output_versions,
         _normalize_to_final_output_path,
         _paragraph_is_simple,
         _paragraph_contains_effective_italics,
@@ -554,12 +556,17 @@ def _cleanup_task_artifacts(paths: list[Path], *, protected_paths: Optional[list
         DESKTOP_ROOT.expanduser().resolve(),
         PROJECT_ROOT,
     }
+    desktop_root = DESKTOP_ROOT.expanduser().resolve()
     for path in paths:
         resolved = path.expanduser().resolve()
         if resolved in seen:
             continue
         seen.add(resolved)
         if resolved in protected_nodes:
+            continue
+        if _path_is_within(resolved, desktop_root):
+            continue
+        if not _is_cleanup_candidate(resolved):
             continue
         if resolved.is_dir():
             if resolved in protected_dirs:
@@ -1882,6 +1889,7 @@ def apply_amendments(
         config,
         protected_paths=[source, output],
     )
+    _prune_output_versions(output)
     return changed, config.get("review_context") or {}
 
 
@@ -1898,9 +1906,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         type=Path,
         help=(
             "Requested amended output DOCX path. The amend flow always writes to a protected "
-            "Desktop final path for the source (<source>_amended_marked_final.docx, then _v2, "
-            "_v3, etc. if prior amended finals already exist). Any other requested filename is "
-            "normalized back to that Desktop output policy. The original source DOCX is never overwritten."
+            "Desktop final path for the source and preserves earlier successful final amended "
+            "DOCX versions unless the user explicitly asks for cleanup. Any other requested "
+            "filename is normalized back to that Desktop output policy. The original source DOCX is never overwritten."
         ),
     )
     parser.add_argument("--config", type=Path, required=True, help="Path to the JSON amendment config.")

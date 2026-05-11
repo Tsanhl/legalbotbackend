@@ -473,8 +473,15 @@ def _expected_final_output_path(original_path: Path) -> Path:
 
 def _root_stem_for_source(path: Path) -> str:
     stem = path.stem
-    while stem.endswith(FINAL_OUTPUT_STEM_SUFFIX):
-        stem = stem[: -len(FINAL_OUTPUT_STEM_SUFFIX)]
+    output_suffix_pattern = re.compile(
+        rf"(?:{re.escape(FINAL_OUTPUT_STEM_SUFFIX)}(?:_v\d+)?)$",
+        flags=re.IGNORECASE,
+    )
+    while True:
+        next_stem = output_suffix_pattern.sub("", stem)
+        if next_stem == stem:
+            break
+        stem = next_stem
     return stem
 
 
@@ -562,9 +569,7 @@ def _copy_source_to_temp_if_same_as_output(source_path: Path, output_path: Path)
 
 
 def _prune_output_versions(path: Path) -> int:
-    # Non-destructive output policy: preserve prior amended Desktop outputs.
-    # This helper is retained for backwards compatibility but no longer removes
-    # any files.
+    path.expanduser().resolve()
     return 0
 
 def _set_yellow_highlight_markup(rPr: etree._Element) -> None:
@@ -4655,6 +4660,7 @@ def refine_from_amended(
     _write_docx_with_replaced_parts(original_docx, out_docx, parts_to_write)
     if markup:
         _assert_markup_detectable(original_docx, out_docx, changed)
+    _prune_output_versions(out_docx)
     return changed, skipped
 
 
@@ -4707,6 +4713,7 @@ def refine_from_amended_text(
                 skipped += 1
 
     _write_docx_with_replaced_part(original_docx, out_docx, part, orig_root)
+    _prune_output_versions(out_docx)
     return changed, skipped
 
 
@@ -4727,8 +4734,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=Path,
         help=(
             "Output DOCX path. The refine flow always writes to a Desktop final path for "
-            "the source (<original>_amended_marked_final.docx, then _v2, _v3, etc. if a "
-            "prior final output already exists). Any other requested filename is normalized "
+            "the source, preserving earlier successful final amended DOCX versions unless "
+            "the user explicitly asks for cleanup. Any other requested filename is normalized "
             "back to that protected Desktop output policy. The original source DOCX is never overwritten."
         ),
     )

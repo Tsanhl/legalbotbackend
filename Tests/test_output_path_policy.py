@@ -1,5 +1,5 @@
 """
-Regression checks for protected versioned DOCX output policy.
+Regression checks for protected Desktop DOCX output policy.
 """
 
 from pathlib import Path
@@ -23,6 +23,11 @@ with tempfile.TemporaryDirectory() as tmp:
         output, normalized = refine._normalize_to_final_output_path(source, None)
         assert output == desktop / "essay_amended_marked_final_v4.docx"
         assert normalized is False
+
+        latest_source = desktop / "essay_amended_marked_final_v3.docx"
+        latest_output, latest_normalized = refine._normalize_to_final_output_path(latest_source, None)
+        assert latest_output == desktop / "essay_amended_marked_final_v4.docx"
+        assert latest_normalized is False
 
         requested = desktop / "custom_name.docx"
         output, normalized = refine._normalize_to_final_output_path(source, requested)

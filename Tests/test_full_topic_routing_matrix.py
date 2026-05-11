@@ -36,6 +36,38 @@ ROUTING_CASES = [
         ),
     },
     {
+        "topic": "medical_ethics",
+        "kind": "essay",
+        "prompt": essay(
+            "Law and Medicine – Medical Ethics",
+            "Critically examine whether the right to determine what shall be done with or to one's body is a fundamental right in English medical law. Consider autonomy, dignity as empowerment, dignity as constraint, utilitarian, duty-based and rights-based arguments, and use focused examples from the Law and Medicine syllabus.",
+        ),
+    },
+    {
+        "topic": "medical_transplantation_hta2004",
+        "kind": "essay",
+        "prompt": essay(
+            "Law and Medicine – Transplantation",
+            "Make the case for reforming one or more aspects of the law on transplantation. Consider the Human Tissue Act 2004, appropriate consent, deemed consent, living donors, deceased donors, directed donation, conditional donation, requested allocation, and section 32 commercialisation.",
+        ),
+    },
+    {
+        "topic": "medical_abortion_aa1967",
+        "kind": "essay",
+        "prompt": essay(
+            "Law and Medicine – Abortion",
+            "Critically examine the view that abortion on grounds of fetal abnormality is in need of legislative reform. Consider the Offences Against the Person Act 1861, the Infant Life (Preservation) Act 1929, Abortion Act 1967 section 1(1)(a), section 1(1)(d), Crowter, Jepson, and disability-discrimination objections.",
+        ),
+    },
+    {
+        "topic": "medical_reproductive_hfea",
+        "kind": "essay",
+        "prompt": essay(
+            "Law and Medicine – Reproductive Medicine",
+            "Critically examine whether the Human Fertilisation and Embryology Act 1990 is unfit for governing assisted reproduction. Consider HFEA licensing, IVF, Schedule 3 consent, section 13(5) welfare of the child, legal parenthood, PGT, saviour siblings, and embryo research.",
+        ),
+    },
+    {
         "topic": "aviation_passenger_injury_montreal",
         "kind": "problem",
         "prompt": problem(
@@ -801,6 +833,14 @@ ROUTING_CASES = [
         "prompt": essay(
             "International Commercial Arbitration",
             "Discuss party autonomy, the seat of arbitration, the New York Convention, the UNCITRAL Model Law, Kompetenz-Kompetenz, separability, the Arbitration Act 1996, Fiona Trust, and section 67.",
+        ),
+    },
+    {
+        "topic": "generic_mediation_law",
+        "kind": "essay",
+        "prompt": essay(
+            "International Commercial Mediation",
+            "Critically evaluate whether mediation law strikes the right balance between voluntary settlement, confidentiality, agreements to mediate, mandatory ADR, enforceability of mediated settlement agreements, and the Singapore Convention.",
         ),
     },
     {

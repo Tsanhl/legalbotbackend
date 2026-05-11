@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from model_applicable_service import (
+    _infer_retrieval_profile,
+    _subject_guide_excerpt_for_query,
     mark_legal_doc_amend_session_active,
     send_message_with_docs,
 )
@@ -41,6 +43,7 @@ from .refine_docx_from_amended import (
     _normalize_body_italics,
     _normalize_case_italics_in_footnotes,
     _normalize_footnote_styles_from_original,
+    _prune_output_versions,
     _normalize_to_final_output_path,
     _paragraph_text_all_runs,
     _write_docx_with_replaced_parts,
@@ -792,13 +795,36 @@ def _build_structured_amend_prompt(
         benchmark_context.append(f"Rubric/Criteria: {rubric_text}")
     benchmark_block = "\n".join(benchmark_context) if benchmark_context else "(No explicit benchmark provided outside the DOCX.)"
 
+    subject_guide_query = "\n".join(
+        [
+            user_request or "",
+            question_text or "",
+            rubric_text or "",
+            "\n".join(snapshot.paragraph_texts[:120]),
+            "\n".join(str(text) for _fid, text in sorted(snapshot.footnotes.items()))[:4000],
+        ]
+    ).strip()
+    subject_guide_block = ""
+    if subject_guide_query:
+        try:
+            subject_profile = _infer_retrieval_profile(subject_guide_query)
+            subject_guide = _subject_guide_excerpt_for_query(
+                subject_guide_query,
+                subject_profile,
+                max_lines=36,
+            )
+        except Exception:
+            subject_guide = ""
+        if subject_guide:
+            subject_guide_block = "Matched subject guide anchors:\n" + subject_guide
+
     amend_runtime_rules = """
 - amend quality target is a genuine 90+ / 10/10 standard: top-band legal analysis, full verification, strong fluency, strong coherence, and final publication-ready polish.
 - the user's original DOCX is read-only. Never overwrite the original source file path.
 - this amend workflow is copy-first and non-destructive: the backend applies changes only to a new amended output copy.
 - implemented amendment markup is yellow highlight only. Do not request bold markup, plain unmarked output, or any other styling change.
 - preserve the user's original local DOCX styling everywhere else: font, size, spacing, alignment, paragraph style, footnote system, and unchanged emphasis remain untouched unless a targeted citation-style correction requires added italics. Do not let paragraph defaults or generic template inheritance leak bold/italic onto changed wording; preserve explicit local user emphasis where the amendment remains inside that user-styled span.
-- final amend delivery is one protected amended DOCX saved directly in Desktop root. Use the canonical Desktop filename first, then allocate the next versioned sibling if a prior final amended output already exists.
+- final amend delivery is one protected amended DOCX saved directly in Desktop root. If the workflow needs to allocate a versioned sibling for the successful run, preserve earlier Desktop DOCX outputs unless the user expressly requests cleanup.
 """.strip()
 
     if _uses_inline_oscola_house_style(active_citation_style):
@@ -841,6 +867,8 @@ Task: produce an amendment plan for the uploaded DOCX so the final amended docum
 
 Mandatory quality standard:
 - follow the backend legal guidance in `model_applicable_service.py` together with `LEGAL_DOC_GUIDE.md` as the controlling instruction set for this amend plan.
+- if a split subject guide is matched below, treat it as controlling subject-specific guidance together with RAG and the uploaded draft:
+{subject_guide_block or "(No matched split subject guide; use universal guide anchors, uploaded draft text, and retrieved RAG.)"}
 - same substantive standard as the legal review workflow: grammar, fluency, coherence, structure, benchmark fit, authority precision, citation accuracy, and final polish.
 - this amend mode should behave like the local legal-review amend workflow: do the full lawyer-grade review internally first, then return direct implemented wording/footnote text rather than a review report.
 - run the equivalent of the full review stack internally before deciding amendments: grammar -> fluency/coherence -> accuracy/authority/citation verification -> final holistic polish.
@@ -892,6 +920,7 @@ Mandatory quality standard:
 - keep the same paragraph count and the same footnote IDs. Do not add or remove paragraphs. Do not add or remove footnote IDs.
 - preserve existing live Word footnote markers and IDs. Only amend existing footnote text when there is a real correction or strengthening reason.
 - if an existing footnote is already accurate and suitable, leave it unchanged word-for-word. Do not rewrite it only for cosmetic consistency.
+- across all citation styles, never delete a user's original footnote or endnote just to tidy, restyle, or convert the reference system. Correct an existing note only when accuracy, relevance, or the user's explicit instruction requires it. If extra support is needed and no existing note should be corrected, add the authority inline immediately after the relevant sentence in the active citation style instead.
 - the downstream DOCX engine will preserve formatting and apply yellow-highlight-only markup to changed wording. Your job is to return the best final paragraph text and footnote text only.
 - do not create brand-new DOCX footnotes or new footnote IDs. If an added or amended sentence needs extra authority support beyond the existing footnotes, append the added authority in inline parentheses `(...)` immediately after the relevant sentence instead.
 - if an existing footnote can be corrected or reused for the sentence, do that in the existing footnote text; otherwise use inline parenthetical support in the body text rather than a new Word footnote.
@@ -1142,6 +1171,7 @@ def apply_structured_amendment_plan(
         _assert_markup_detectable(work_source, output_path, total_changed)
         if total_changed <= 0:
             raise ValueError("No detectable amendments were generated for the DOCX.")
+        _prune_output_versions(output_path)
         return output_path, changed_paragraphs, changed_footnotes
     finally:
         if temp_source_dir is not None:

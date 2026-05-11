@@ -86,6 +86,7 @@ PROBLEM_TOPICS = {
     "land_leasehold_covenants",
     "medical_consent_capacity",
     "medical_end_of_life_mca2005",
+    "medical_transplantation_hta2004",
     "partnership_law_pa1890",
     "private_international_law_post_brexit",
     "public_international_law_immunities_icc",
@@ -143,6 +144,13 @@ In your answer, address:
 - regulatory tools and enforcement
 - the pressure between development and protection
 - whether the current framework is effective overall
+""".strip(),
+    "generic_planning_law": """
+4500 words
+1. Planning Law - Essay Question
+Critically evaluate how English planning law balances the development plan, material considerations, and local authority discretion when deciding planning applications.
+
+In your answer, consider Town and Country Planning Act 1990 section 70(2), Planning and Compulsory Purchase Act 2004 section 38(6), the role of the National Planning Policy Framework, planning conditions, legitimate expectations, reasons, and judicial/statutory review of planning decisions.
 """.strip(),
     "generic_eu_law": """
 4500 words
@@ -274,6 +282,16 @@ Advise on refugee status, non-refoulement, Article 8 ECHR, and whether deportati
 1. International Commercial Arbitration - Essay Question
 Discuss party autonomy, the seat of arbitration, separability, kompetenz-kompetenz, and the supervisory role of the Arbitration Act 1996, with reference to Fiona Trust and Enka v Chubb.
 """.strip(),
+    "generic_mediation_law": """
+4500 words
+1. International Commercial Mediation - Essay Question
+Evaluate whether mediation law strikes the right balance between voluntary settlement, confidentiality, enforceability of mediated settlement agreements, and access to justice.
+
+In your answer, consider:
+- Consider agreements to mediate and mandatory ADR
+- Consider confidentiality and without-prejudice protection
+- Consider enforcement of mediated settlement agreements and the Singapore Convention
+""".strip(),
     "ip_trademark_shapes": """
 4500 words
 1. Intellectual Property - Essay Question (Trade Marks and Shape Marks)
@@ -288,6 +306,41 @@ Advise on assignment, the Landlord and Tenant (Covenants) Act 1995, authorised g
 4500 words
 1. Medical Law - Problem Question (End of Life)
 Advise on the legality of withdrawing treatment, the Mental Capacity Act 2005 best-interests analysis, and whether any assisted-dying or suicide-act issue arises, with reference to Bland, Pretty, and Nicklinson.
+""".strip(),
+    "medical_ethics": """
+4500 words
+1. Law and Medicine - Essay Question (Medical Ethics)
+Critically examine whether the right to determine what shall be done with or to one's body is a fundamental right in English medical law. Discuss autonomy, dignity, utilitarian, duty-based and rights-based arguments using two or three focused examples from the Law and Medicine syllabus.
+
+In your answer, consider:
+- medical ethics and bodily autonomy
+- two or three focused syllabus examples
+- whether English medical law reflects the stated right consistently
+""".strip(),
+    "medical_transplantation_hta2004": """
+4500 words
+1. Law and Medicine - Problem Question (Transplantation)
+Advise a hospital on deceased organ donation, living organ donation, appropriate consent under the Human Tissue Act 2004, deemed consent, section 33 approval, conditional or directed donation, requested allocation, and section 32 commercialisation concerns.
+""".strip(),
+    "medical_abortion_aa1967": """
+4500 words
+1. Law and Medicine - Essay Question (Abortion)
+Critically examine whether abortion on grounds of fetal abnormality is in need of legislative reform, with reference to the Offences Against the Person Act 1861, Infant Life (Preservation) Act 1929, Abortion Act 1967 section 1(1)(a), section 1(1)(d), Crowter, and Jepson.
+
+In your answer, consider:
+- the criminal background and Abortion Act 1967 gateway
+- the section 1(1)(a) and section 1(1)(d) grounds
+- reform arguments concerning fetal abnormality
+""".strip(),
+    "medical_reproductive_hfea": """
+4500 words
+1. Law and Medicine - Essay Question (Reproductive Medicine)
+Critically examine whether the Human Fertilisation and Embryology Act 1990 is unfit for governing assisted reproduction, with reference to HFEA licensing, Schedule 3 consent, section 13(5) welfare of the child, legal parenthood, PGT, saviour siblings, and embryo research.
+
+In your answer, consider:
+- the HFEA licensing framework
+- consent, welfare of the child, and parenthood
+- PGT, saviour siblings, embryo research, and reform
 """.strip(),
     "public_international_law_customary_sources": """
 4500 words

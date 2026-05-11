@@ -57,6 +57,13 @@ assert any("barnardo" in item.lower() for item in pensions_profile["must_cover"]
 assert int((pensions_profile.get("source_mix_min") or {}).get("cases", 0)) >= 5
 assert any("section 67 as exhausting the amendment question" in item.lower() for item in pensions_profile["must_avoid"])
 assert "amendment power, proper purpose, and good-faith/rationality review separate from section 67" in source
+assert "supervisor/module feedback at rule level" in source
+assert "authority hierarchy and pinpoint discipline" in source
+assert "scheme purpose, pensions act 2004 section 255" in source
+assert "do not assume section 62 automatically changes every nra outcome" in source
+assert "tcpa 1990 section 70(2)" in source
+assert "pcpa 2004 section 38(6)" in source
+assert "do not let arbitration act section 70" in source
 
 
 print("Module-material guidance regression passed.")

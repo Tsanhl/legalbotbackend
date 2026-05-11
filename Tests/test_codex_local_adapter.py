@@ -141,4 +141,66 @@ finally:
         os.environ["LEGAL_AI_CODEX_ALLOW_NETWORK_DISABLED"] = original_allow_env
 
 
+search_commands = []
+original_find = gs._find_codex_cli
+original_run = gs.subprocess.run
+original_prepare_runtime_home = gs._prepare_codex_runtime_home
+original_supports_option = gs._codex_exec_supports_option
+original_network_env = os.environ.get("CODEX_SANDBOX_NETWORK_DISABLED")
+original_allow_env = os.environ.get("LEGAL_AI_CODEX_ALLOW_NETWORK_DISABLED")
+original_local_search_env = os.environ.get("LEGAL_AI_CODEX_LOCAL_ALLOW_SEARCH")
+try:
+    gs._find_codex_cli = lambda: "/fake/codex"
+    gs._codex_exec_supports_option = lambda cli, option: option == "--search"
+    os.environ.pop("CODEX_SANDBOX_NETWORK_DISABLED", None)
+    os.environ["LEGAL_AI_CODEX_ALLOW_NETWORK_DISABLED"] = "1"
+    os.environ.pop("LEGAL_AI_CODEX_LOCAL_ALLOW_SEARCH", None)
+
+    class _SearchResult:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_prepare_runtime_home_for_search(runtime_root: Path) -> Path:
+        home = runtime_root / "codex_home"
+        home.mkdir(parents=True, exist_ok=True)
+        return home
+
+    def _fake_run_for_search(cmd, input, text, capture_output, cwd, env, timeout):
+        search_commands.append(list(cmd))
+        output_idx = cmd.index("-o") + 1
+        Path(cmd[output_idx]).write_text("Part I: Introduction\n\nSearch-enabled answer.", encoding="utf-8")
+        return _SearchResult()
+
+    gs._prepare_codex_runtime_home = _fake_prepare_runtime_home_for_search
+    gs.subprocess.run = _fake_run_for_search
+    generated = gs._generate_with_codex_local_adapter(
+        full_message="Backend asks for a recent-law essay.",
+        system_instruction="Follow the backend rules.",
+        history=[],
+        project_id="proj-search",
+        allow_web_search=True,
+    )
+    assert "Search-enabled answer" in generated
+finally:
+    gs._find_codex_cli = original_find
+    gs.subprocess.run = original_run
+    gs._prepare_codex_runtime_home = original_prepare_runtime_home
+    gs._codex_exec_supports_option = original_supports_option
+    if original_network_env is None:
+        os.environ.pop("CODEX_SANDBOX_NETWORK_DISABLED", None)
+    else:
+        os.environ["CODEX_SANDBOX_NETWORK_DISABLED"] = original_network_env
+    if original_allow_env is None:
+        os.environ.pop("LEGAL_AI_CODEX_ALLOW_NETWORK_DISABLED", None)
+    else:
+        os.environ["LEGAL_AI_CODEX_ALLOW_NETWORK_DISABLED"] = original_allow_env
+    if original_local_search_env is None:
+        os.environ.pop("LEGAL_AI_CODEX_LOCAL_ALLOW_SEARCH", None)
+    else:
+        os.environ["LEGAL_AI_CODEX_LOCAL_ALLOW_SEARCH"] = original_local_search_env
+
+assert search_commands and "--search" in search_commands[0]
+
+
 print("Codex local adapter checks passed.")

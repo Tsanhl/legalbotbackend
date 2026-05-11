@@ -41,6 +41,7 @@ from legal_doc_tools.refine_docx_from_amended import (
     _normalize_body_italics,
     _normalize_case_italics_in_footnotes,
     _normalize_footnote_styles_from_original,
+    _prune_output_versions,
     _paragraph_text_all_runs,
     _require_desktop_root_output,
     _write_docx_with_replaced_parts,
@@ -579,6 +580,7 @@ def amend_large_docx(
             raise ValueError(f"Final OSCOLA validation failed: {joined}")
         if changed_paragraphs + changed_footnotes <= 0:
             raise ValueError("No detectable amendments were generated.")
+        _prune_output_versions(output_path)
 
         print(
             f"Completed: changed_paragraphs={changed_paragraphs} changed_footnotes={changed_footnotes} output={output_path}",
@@ -601,8 +603,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=None,
         help=(
             "Requested amended DOCX path. The tool always normalizes to a protected Desktop final path "
-            "for the source (<stem>_amended_marked_final.docx, then _v2, _v3, etc. if needed). "
-            "The original source DOCX is never overwritten."
+            "for the source and preserves earlier successful final amended DOCX versions unless "
+            "the user explicitly asks for cleanup. The original source DOCX is never overwritten."
         ),
     )
     parser.add_argument("--provider", default="gemini")

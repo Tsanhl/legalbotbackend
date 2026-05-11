@@ -5,10 +5,10 @@ Two new intelligent features have been added to enhance the essay writing and im
 
 ---
 
-## Feature 1: Google Search with OSCOLA Citations
+## Feature 1: Backend Online Search with Active-Style Citations
 
 ### What it does:
-Automatically detects when the knowledge database is insufficient for answering a query and emphasizes the use of Google Search to find additional authoritative sources. All Google Search sources are automatically cited in proper OSCOLA format.
+Automatically detects when the knowledge database is insufficient for answering a query and triggers backend online search to find additional authoritative sources. No provider API is required when the local Codex backend is available: Codex can use RAG plus its own web-search capability. Gemini can satisfy this through native Google Search grounding; OpenAI, Anthropic, xAI, and non-Codex backend paths can use the shared backend online-search context when a search provider is configured. Search-derived sources are cited in the active citation style, with OSCOLA as the default.
 
 ### Key Behaviors:
 1. **Automatic Detection**: The system detects when:
@@ -18,17 +18,17 @@ Automatically detects when the knowledge database is insufficient for answering 
    - Essay writing requests (especially longer essays)
    - Specific legal areas needing current updates (AI law, data protection, etc.)
 
-2. **OSCOLA Citation Enforcement**: 
-   - All Google Search sources MUST be cited in OSCOLA format
+2. **Citation Enforcement**: 
+   - All backend online-search sources MUST be cited in the active citation style
    - Citations appear in parentheses () immediately after relevant sentences
-   - Citations are marked with ** for emphasis: `(Montgomery v Lanarkshire Health Board [2015] UKSC 11).**`
+   - Do not add markdown emphasis markers around citations
    - System verifies citations before output
 
 3. **Examples of Proper Citations**:
    ```
-   "The principle of informed consent has evolved significantly (Montgomery v Lanarkshire Health Board [2015] UKSC 11).**"
+   "The principle of informed consent has evolved significantly (Montgomery v Lanarkshire Health Board [2015] UKSC 11)."
    
-   "Academic commentary suggests a shift towards patient autonomy (J Herring, 'The Place of Parental Rights in Medical Law' (2014) 42 Journal of Medical Ethics 146).**"
+   "Academic commentary suggests a shift towards patient autonomy (J Herring, 'The Place of Parental Rights in Medical Law' (2014) 42 Journal of Medical Ethics 146)."
    ```
 
 ### Implementation Details:
@@ -123,7 +123,7 @@ User Message
     ↓
 detect_specific_para_improvement(message)
     ↓
-detect Google Search needs (message, rag_context)
+detect backend online-search need (message, rag_context)
     ↓
 Add contextual instructions to AI prompt
     ↓
@@ -137,7 +137,7 @@ Both features log their activity for debugging:
 ```
 [PARA IMPROVEMENT MODE] Specific paragraphs - ['para 1', 'introduction']
 [GOOGLE SEARCH] Enabled - Reason: Detected indicator: essay
-[GOOGLE SEARCH] OSCOLA citations will be enforced for all external sources
+[GOOGLE SEARCH] Active citation-style guard will be enforced for external sources
 ```
 
 ---
@@ -146,12 +146,12 @@ Both features log their activity for debugging:
 
 ### Before:
 - Users couldn't get targeted paragraph feedback without full rewrites
-- Google Search sources were not consistently cited in OSCOLA format
+- Search-derived sources were not consistently cited in the active citation style
 - No distinction between "show me what needs work" vs "fix everything"
 
 ### After:
 - Users can ask "which paragraphs can be improved" and get specific, actionable feedback
-- All external sources automatically cited in proper OSCOLA format with ** markers
+- All external sources automatically cited in the active citation style without markdown markers
 - System intelligently routes to appropriate improvement mode
 - Better source integration with academic integrity maintained
 
@@ -167,12 +167,12 @@ Both features log their activity for debugging:
 **Input**: "Improve my entire essay"
 **Expected**: System rewrites complete essay with improvements throughout
 
-### Test Case 3: Google Search + OSCOLA
+### Test Case 3: Backend Online Search + OSCOLA
 **Input**: "Write a 3000 word essay on AI regulation and data protection"
 **Expected**: 
 - System detects essay + modern topics
-- Uses Google Search for recent sources
-- All citations in OSCOLA format with ** markers
+- Uses backend online search / Gemini Google grounding for recent sources where RAG is thin
+- All citations in OSCOLA format by default
 - Console shows: `[GOOGLE SEARCH] Enabled - Reason: Detected indicator: essay`
 
 ### Test Case 4: Specific Paragraph Fix
@@ -189,7 +189,7 @@ Both features log their activity for debugging:
 1. **Academic Integrity**: Ensures all external sources are properly cited in OSCOLA format
 2. **Efficiency**: Users get targeted feedback without rewriting entire essays unnecessarily
 3. **Flexibility**: System adapts to user needs - specific feedback vs comprehensive improvement
-4. **Source Quality**: Encourages use of Google Search when knowledge base is insufficient
+4. **Source Quality**: Encourages backend online search when knowledge base is insufficient
 5. **User Clarity**: Clear labeling and structure makes it obvious which mode is active
 
 ---

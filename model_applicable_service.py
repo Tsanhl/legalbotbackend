@@ -8,16 +8,20 @@ import os
 import base64
 import csv
 import io
+import json
 import re
 import math
 import shutil
 import subprocess
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple, Union, Iterable
+from typing import Optional, List, Dict, Any, Tuple, Union, Iterable, Set
 import xml.etree.ElementTree as ET
 
 try:
@@ -488,6 +492,13 @@ ALLOW_GOOGLE_FALLBACK_FOR_LONG_ANSWERS = (
 ALLOW_GOOGLE_FALLBACK_FOR_CONTINUATIONS = (
     os.getenv("ALLOW_GOOGLE_FALLBACK_FOR_CONTINUATIONS", "0").strip().lower() in {"1", "true", "yes"}
 )
+ENABLE_BACKEND_ONLINE_SEARCH_FALLBACK = (
+    os.getenv("ENABLE_BACKEND_ONLINE_SEARCH_FALLBACK", "1").strip().lower() in {"1", "true", "yes", "on"}
+)
+BACKEND_ONLINE_SEARCH_TIMEOUT_SEC = max(
+    3,
+    int((os.getenv("BACKEND_ONLINE_SEARCH_TIMEOUT_SEC") or "8").strip() or "8"),
+)
 
 # Store chat sessions by project ID
 chat_sessions: Dict[str, Any] = {}
@@ -705,6 +716,7 @@ Core rules:
 68. In longer essays, short descriptive A. / B. / C. subsections inside a Part may be used where they genuinely improve clarity, but the top-level Part scaffold remains primary.
 69. The final essay conclusion must synthesise the answer briefly and directly; do not introduce fresh doctrinal sections, new case clusters, or new analytical headings there.
 70. When OSCOLA is the active citation style, every parenthetical authority reference must be a full OSCOLA citation. Bare forms such as '(Coughlan)', '(Craig)', '(Begbie)', or '(Administrative Law chapter)' are forbidden.
+71. Apply supervisor/formative/summative feedback as general quality controls: answer every express prompt limb, use verified current authority and pinpoints, state assumptions/calculations, and avoid SPaG, repetition, and vague referents.
 """
 
 def _int_to_roman(num: int) -> str:
@@ -1168,7 +1180,7 @@ def get_dynamic_chunk_count(
     # Get ALL detected types for logging
     all_types = detect_all_query_types(message, history)
     query_type = detect_query_type(message, history)
-    target = _requested_word_target(message)
+    target = int(_requested_word_target(message) or 0)
     complexity_tag = " (complex)" if "complex" in query_type else ""
 
     if (
@@ -1184,7 +1196,7 @@ def get_dynamic_chunk_count(
         )
         return chunk_count
 
-    chunk_count = _chunk_count_for_query_type(query_type, target)
+    chunk_count = _chunk_count_for_query_type(query_type, target if target > 0 else None)
 
     # Enhanced logging for combined questions
     if len(all_types) > 1:
@@ -1332,7 +1344,7 @@ def _strip_pasted_output_tail(text: str) -> str:
 
     markers = [
         r"(?im)^\s*output\b.*$",
-        r"(?im)^\s*planning\b.*$",
+        r"(?im)^\s*planning\s+(?:the\s+)?(?:answer|response|draft|output|next\s+part)\b.*$",
         r"(?im)^\s*running\s+final\s+verification\s+checks(?:\s*[\.\u2026]*)?\s*$",
         r"(?im)^\s*running\s+final\s+check(?:s)?(?:\s*[\.\u2026]*)?\s*$",
         r"(?im)^\s*long\s+multi-topic\s+response\s+detected\b.*$",
@@ -2889,6 +2901,38 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
     ql = q.lower()
     is_problem_prompt = bool(re.search(r"(?im)\bproblem question\b|\badvise\b", q))
     is_essay_prompt = bool(re.search(r"(?im)\bessay question\b|\bcritically discuss\b|\bcritically evaluate\b|\bevaluate\b", q))
+    planning_law_context = (
+        any(k in ql for k in [
+            "planning law", "town and country planning", "planning and compulsory purchase",
+            "national planning policy framework", "nppf", "local planning authority",
+            "planning application", "planning applications", "planning permission",
+            "development plan", "material considerations", "material planning considerations",
+        ])
+        or bool(re.search(r"\b(?:s|section)\s*70\s*\(2\)", ql))
+        or bool(re.search(r"\b(?:s|section)\s*38\s*\(6\)", ql))
+    )
+    arbitration_core_context = any(k in ql for k in [
+        "arbitration", "arbitral", "arbitrator", "arbitrators", "arbitral award",
+        "seat of arbitration", "lex arbitri", "new york convention", "uncitral",
+        "kompetenz", "kompetenz-kompetenz", "separability", "arbitration act 1996",
+        "arbitration act 2025", "fiona trust", "enka v chubb", "halliburton",
+        "section 67 challenge", "section 68 challenge", "section 69 appeal",
+        "section 70 filter",
+    ])
+    pensions_law_context = any(k in ql for k in [
+        "pensions law", "occupational pension", "occupational pensions",
+        "occupational pension scheme", "occupational pension schemes",
+        "pension scheme", "pension schemes", "pensions act 1995",
+        "pensions act 2004", "section 67 pensions act 1995",
+        "barber equalisation", "barber equalization", "pensions ombudsman",
+        "scheme amendment", "amendment power", "normal retirement age",
+    ])
+    mediation_context = any(k in ql for k in [
+        "international commercial mediation", "commercial mediation", "mediation law",
+        "mediated settlement", "settlement resulting from mediation",
+        "singapore convention", "agreement to mediate", "without prejudice mediation",
+        "confidentiality in mediation", "mediator misconduct", "mandatory mediation",
+    ])
     units_for_profile: List[Dict[str, Any]] = []
     if _allow_unit_split and re.search(r"(?im)\bessay question\b|\bproblem question\b|^\s*\d+\.\s+.+$", q):
         try:
@@ -2980,6 +3024,8 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
     topic = "general_legal"
     if any(k in ql for k in [
         "end of life", "end-of-life", "assisted suicide", "assisted dying",
+        "advance refusal", "advance refusals", "advance decision to refuse",
+        "ventilator", "ventilation", "life-sustaining treatment", "life sustaining treatment",
         "withdrawal of treatment", "withholding treatment", "canh", "clinically assisted nutrition and hydration",
         "persistent vegetative state", "pvs", "minimally conscious state", "locked-in syndrome", "suicide act 1961",
         "airedale", "bland", "pretty v dpp", "nicklinson",
@@ -3002,6 +3048,46 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         )
     ):
         topic = "clinical_negligence_causation_loss_of_chance"
+    elif any(k in ql for k in [
+        "medical ethics", "law and medicine ethics", "bodily autonomy",
+        "body is a fundamental right", "right to determine what shall be done",
+        "dignity as empowerment", "dignity as constraint", "sanctity of life view",
+        "utilitarian", "duty-based", "rights-based", "virtue ethics",
+    ]) and any(k in ql for k in [
+        "law and medicine", "medical law", "patient", "treatment", "abortion",
+        "transplant", "end of life", "assisted dying", "reproductive",
+    ]):
+        topic = "medical_ethics"
+    elif any(k in ql for k in [
+        "transplantation", "organ donation", "deceased donation", "deceased donor",
+        "living donation", "living donor", "human tissue act", "hta 2004",
+        "human tissue authority", "appropriate consent", "deemed consent",
+        "conditional donation", "directed donation", "requested allocation",
+        "commercial dealing", "commercialisation", "commercialization",
+    ]) or (
+        any(k in ql for k in ["section 32", "s.32", "s 32"])
+        and any(k in ql for k in ["organ", "human tissue", "transplant"])
+    ):
+        topic = "medical_transplantation_hta2004"
+    elif any(k in ql for k in [
+        "abortion", "termination of pregnancy", "abortion act", "abortion act 1967",
+        "fetal abnormality", "foetal abnormality", "seriously handicapped",
+        "crowter", "jepson", "sarah catt", "carla foster",
+    ]) or (
+        any(k in ql for k in ["offences against the person act 1861", "infant life preservation act"])
+        and any(k in ql for k in ["abortion", "pregnancy", "pregnant", "fetal", "foetal", "termination"])
+    ):
+        topic = "medical_abortion_aa1967"
+    elif any(k in ql for k in [
+        "reproductive medicine", "assisted reproduction", "assisted reproductive",
+        "human fertilisation", "human fertilization", "human fertilisation and embryology",
+        "human fertilization and embryology", "hfea", "ivf", "in vitro fertilisation",
+        "in vitro fertilization", "embryo research", "embryo testing",
+        "preimplantation genetic testing", "pre-implantation genetic testing",
+        "pgt", "saviour sibling", "savior sibling", "welfare of the child",
+        "section 13(5)", "s.13(5)", "s 13(5)", "evans v amicus", "evans v united kingdom",
+    ]):
+        topic = "medical_reproductive_hfea"
     elif (
         any(k in ql for k in [
             "material risk", "lacks capacity", "mental capacity act", "mca 2005",
@@ -3103,6 +3189,11 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         )
     ):
         topic = "family_cohabitation_reform"
+    elif (
+        mediation_context
+        and not any(k in ql for k in ["victim-offender mediation", "victim offender mediation", "restorative justice"])
+    ):
+        topic = "generic_mediation_law"
     elif (
         any(k in ql for k in [
             "mediation", "mediated settlement", "singapore convention", "without prejudice",
@@ -3219,6 +3310,10 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "pensions act 1995", "occupational pension", "occupational pension schemes",
         "pension scheme", "pension schemes", "section 67 pensions act 1995",
         "consultation by employers", "re courage group's pension schemes",
+        "private international law", "conflict of laws", "rome i", "rome ii", "brussels i",
+        "hague choice of court", "choice of court convention", "anti-suit injunction",
+        "anti suit injunction", "forum conveniens", "service out", "parallel proceedings",
+        "jurisdiction clause", "applicable law",
     ]):
         topic = "contract_misrepresentation_exclusion"
     elif any(k in ql for k in [
@@ -3325,6 +3420,20 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         topic = "insolvency_corporate"
     elif (
         "corporate bhr parent liability" in ql
+        or (
+            any(k in ql for k in [
+                "business and human rights", "human rights due diligence",
+                "mandatory human rights due diligence", "mandatory due diligence",
+                "corporate sustainability due diligence", "supply-chain due diligence",
+                "supply chain due diligence",
+            ])
+            and any(k in ql for k in [
+                "supply chain", "supply-chain", "lower-tier suppliers", "lower tier suppliers",
+                "audit fatigue", "worker-led monitoring", "modern slavery act",
+                "duty of vigilance", "due diligence laws", "human rights due diligence laws",
+                "corporate sustainability due diligence",
+            ])
+        )
         or (
             sum(1 for k in [
                 "parent company liability", "parent duty of care", "foreign direct liability",
@@ -3436,6 +3545,9 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             "wto", "gatt", "most-favoured-nation", "most favoured nation",
             "dispute settlement", "development asymmetry",
             "global trade rules", "trade rules promote fairness", "international trade law",
+            "international humanitarian law", "ihl", "law of armed conflict", "loac",
+            "additional protocol i", "precautions in attack", "article 36 weapons",
+            "weapons review", "rome statute", "clearly excessive", "dual-use objects",
         ])
     ):
         topic = "eu_free_movement_goods"
@@ -3542,6 +3654,20 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         topic = "generic_charity_law"
     elif (
         "corporate bhr parent liability" in ql
+        or (
+            any(k in ql for k in [
+                "business and human rights", "human rights due diligence",
+                "mandatory human rights due diligence", "mandatory due diligence",
+                "corporate sustainability due diligence", "supply-chain due diligence",
+                "supply chain due diligence",
+            ])
+            and any(k in ql for k in [
+                "supply chain", "supply-chain", "lower-tier suppliers", "lower tier suppliers",
+                "audit fatigue", "worker-led monitoring", "modern slavery act",
+                "duty of vigilance", "due diligence laws", "human rights due diligence laws",
+                "corporate sustainability due diligence",
+            ])
+        )
         or (
             sum(1 for k in [
                 "parent company liability", "parent duty of care", "foreign direct liability",
@@ -3789,6 +3915,7 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         topic = "prison_law_state_treatment_review"
     elif (
         "pensions scheme change misrepresentation" in ql
+        or pensions_law_context
         or (
             any(k in ql for k in [
                 "pensions law", "pension scheme", "final salary pension scheme", "defined contribution",
@@ -3863,7 +3990,11 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "principal and agent", "third parties who deal with agents",
     ]) and "partnership" not in ql:
         topic = "generic_agency_law"
-    elif any(k in ql for k in ["financial regulation", "systemic risk", "macroprudential", "market efficiency", "bank fails compliance rules", "compliance rules"]):
+    elif any(k in ql for k in ["financial regulation", "systemic risk", "macroprudential", "market efficiency", "bank fails compliance rules", "compliance rules"]) and not any(k in ql for k in [
+        "public international law", "article 2(4)", "article 51", "un charter",
+        "use of force", "armed attack", "self-defence", "self defence", "state responsibility",
+        "effective control", "overall control", "nicaragua", "oil platforms",
+    ]):
         topic = "generic_financial_regulation_law"
     elif any(k in ql for k in ["consumer law", "consumer protection law"]) and not any(
         k in ql for k in ["consumer rights act 2015", "cra 2015", "unfair terms", "faulty", "not as described"]
@@ -4042,6 +4173,11 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
                 "article 15 echr", "article 1 echr", "al-skeini", "al jedda", "al-jedda",
                 "bankovic", "banković", "iccpr article 4", "article 4 iccpr",
             ])
+            and not any(k in ql for k in [
+                "public international law", "un charter", "article 2(4)", "article 51",
+                "jus ad bellum", "use of force", "armed attack", "self-defence", "self defence",
+                "attribution", "effective control", "overall control", "nicaragua", "oil platforms",
+            ])
         )
     ):
         topic = "human_rights_proportionality_adjudication"
@@ -4147,6 +4283,9 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             ])
             and not any(k in ql for k in [
                 "mortgage", "surety", "etridge", "o'brien", "family home",
+                "planning law", "planning permission", "local planning authority",
+                "development plan", "material considerations", "national planning policy framework",
+                "nppf", "town and country planning", "section 70(2)", "section 38(6)",
             ])
         )
     ):
@@ -4181,18 +4320,18 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         and "misuse of private information" not in ql
     ):
         topic = "public_law_article8_proportionality"
-    elif (
+    elif planning_law_context and (
         any(k in ql for k in [
             "planning law", "planning permission", "local planning authority", "local authority grants planning permission",
-            "mixed-use development", "mixed use development", "conservation area", "flood risk",
-            "material considerations", "town and country planning", "late publication of documents",
-            "meaningful comment", "judicial review of planning permission",
+            "planning application", "planning applications", "mixed-use development", "mixed use development",
+            "conservation area", "flood risk", "traffic impact", "material considerations",
+            "development plan", "town and country planning", "planning and compulsory purchase",
+            "national planning policy framework", "nppf", "late publication of documents",
+            "meaningful comment", "judicial review of planning permission", "statutory review",
+            "section 70(2)", "section 38(6)",
         ])
-        and any(k in ql for k in [
-            "planning permission", "material considerations", "flood risk",
-            "traffic impact", "conservation area", "meaningful comment",
-            "procedural fairness", "irrationality",
-        ])
+        or bool(re.search(r"\b(?:s|section)\s*70\s*\(2\)", ql))
+        or bool(re.search(r"\b(?:s|section)\s*38\s*\(6\)", ql))
     ):
         topic = "generic_planning_law"
     elif (
@@ -4548,7 +4687,7 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
     elif (
         any(k in ql for k in [
             "construction law", "construction contract", "contractor", "employer",
-            "jct", "nec", "extension of time", "liquidated damages",
+            "jct", "nec contract", "nec3", "nec4", "extension of time", "liquidated damages",
             "practical completion", "adjudication", "defects liability",
             "defective work", "construction project", "building contract", "works contract",
         ])
@@ -4560,6 +4699,9 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         and not any(k in ql for k in [
             "consumer credit", "credit agreement", "unfair relationship",
             "linked transaction", "lender", "section 140a", "section 75",
+            "public international law", "un charter", "article 2(4)", "article 51",
+            "jus ad bellum", "use of force", "armed attack", "self-defence", "self defence",
+            "attribution", "effective control", "overall control", "nicaragua", "oil platforms",
         ])
     ):
         topic = "construction_delay_defects"
@@ -4579,7 +4721,7 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             and any(k in ql for k in ["consumer", "consumer rights act", "cra 2015", "significant imbalance", "good faith", "transparent and prominent"])
         )
         or any(k in ql for k in ["significant imbalance", "good faith", "transparent and prominent", "oft v ashbourne", "first national bank"])
-    ):
+    ) and not pensions_law_context:
         topic = "consumer_unfair_terms_cra2015"
     elif any(k in ql for k in [
         "supremacy", "primacy", "direct effect", "vertical direct effect", "horizontal direct effect",
@@ -4632,7 +4774,11 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         ])
     ):
         topic = "ihl_targeting_proportionality_civilians"
-    elif any(k in ql for k in ["free movement of goods", "article 34", "meqr", "dassonville", "cassis", "cassis de dijon", "mutual recognition", "mandatory requirements", "keck", "selling arrangements", "article 36"]):
+    elif any(k in ql for k in ["free movement of goods", "article 34", "meqr", "dassonville", "cassis", "cassis de dijon", "mutual recognition", "mandatory requirements", "keck", "selling arrangements", "article 36"]) and not any(k in ql for k in [
+        "international humanitarian law", "ihl", "law of armed conflict", "loac",
+        "additional protocol i", "precautions in attack", "article 36 weapons",
+        "weapons review", "rome statute", "clearly excessive", "dual-use objects",
+    ]):
         topic = "eu_free_movement_goods"
     elif (
         "international law" in ql
@@ -4700,14 +4846,14 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         topic = "land_leasehold_covenants"
     elif "land law" in ql:
         topic = "generic_land_law"
-    elif any(k in ql for k in [
+    elif arbitration_core_context and any(k in ql for k in [
         "arbitration", "party autonomy", "lex arbitri", "new york convention",
         "uncitral", "model law", "seat of arbitration", "kompetenz", "kompetenz-kompetenz",
         "separability", "arbitration act 1996", "arbitration act 2025",
         "section 30", "section 67", "section 68", "section 69", "section 70",
         "fiona trust", "enka v chubb", "halliburton", "duty of disclosure",
         "summary disposal", "arbitral award",
-    ]) and not any(k in ql for k in [
+    ]) and not planning_law_context and not any(k in ql for k in [
         "private international law", "conflict of laws", "choice of law",
         "forum conveniens", "parallel proceedings", "cross-border private disputes",
         "cross border private disputes", "brussels i recast", "rome i", "rome ii",
@@ -5088,6 +5234,53 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             "Aintree University Hospitals NHS Foundation Trust v James",
             "W v Egdell",
         ],
+        "medical_ethics": [
+            "medical ethics",
+            "bodily autonomy",
+            "utilitarian theories",
+            "duty-based theories",
+            "rights-based theories",
+            "virtue ethics",
+            "dignity as empowerment",
+            "dignity as constraint",
+            "Re T (Adult: Refusal of Treatment)",
+            "Re B (Adult: Refusal of Medical Treatment)",
+        ],
+        "medical_transplantation_hta2004": [
+            "Human Tissue Act 2004",
+            "section 1",
+            "section 3",
+            "section 32",
+            "section 33",
+            "appropriate consent",
+            "deemed consent",
+            "Human Tissue Authority Code A",
+            "Human Tissue Authority Code F",
+            "NHS Blood and Transplant requested allocation policy",
+        ],
+        "medical_abortion_aa1967": [
+            "Offences Against the Person Act 1861",
+            "sections 58 and 59",
+            "Infant Life (Preservation) Act 1929",
+            "Abortion Act 1967",
+            "section 1(1)(a)",
+            "section 1(1)(d)",
+            "two registered medical practitioners",
+            "R (Crowter) v Secretary of State for Health and Social Care",
+            "Jepson v Chief Constable of West Mercia",
+        ],
+        "medical_reproductive_hfea": [
+            "Human Fertilisation and Embryology Act 1990",
+            "Human Fertilisation and Embryology Act 2008",
+            "Human Fertilisation and Embryology Authority",
+            "HFEA Code of Practice",
+            "section 13(5)",
+            "Schedule 2",
+            "Schedule 3",
+            "Evans v Amicus Healthcare",
+            "Evans v United Kingdom",
+            "R (Quintavalle) v HFEA",
+        ],
         "aviation_passenger_injury_montreal": [
             "Convention for the Unification of Certain Rules for International Carriage by Air 1999",
             "Montreal Convention 1999",
@@ -5246,6 +5439,18 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             "Halsey v Milton Keynes General NHS Trust",
             "PGF II SA v OMFS Company 1 Ltd",
             "Jackson reforms",
+        ],
+        "generic_mediation_law": [
+            "international commercial mediation",
+            "Singapore Convention on Mediation",
+            "mediated settlement agreement",
+            "agreement to mediate",
+            "without prejudice",
+            "confidentiality",
+            "Halsey v Milton Keynes General NHS Trust",
+            "Churchill v Merthyr Tydfil County Borough Council",
+            "Farm Assist Ltd v Secretary of State for the Environment",
+            "Ohpen Operations UK Ltd v Invesco Fund Managers Ltd",
         ],
         "patent_validity_infringement_ownership": [
             "Patents Act 1977",
@@ -6172,8 +6377,14 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "generic_planning_law": [
             "Town and Country Planning Act 1990",
             "section 70(2)",
+            "section 288",
             "Planning and Compulsory Purchase Act 2004",
             "section 38(6)",
+            "National Planning Policy Framework",
+            "planning conditions",
+            "legitimate expectation",
+            "duty to give reasons",
+            "statutory review",
             "Planning (Listed Buildings and Conservation Areas) Act 1990",
             "section 72(1)",
             "Senior Courts Act 1981",
@@ -6490,6 +6701,34 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             "emergency treatment", "advance decision", "lasting power of attorney",
             "battery", "confidentiality", "disclosure to third parties", "w v egdell",
         ],
+        "medical_ethics": [
+            "law and medicine", "medical ethics", "medical law and ethics",
+            "autonomy", "bodily autonomy", "sanctity of life", "dignity",
+            "dignity as empowerment", "dignity as constraint", "utilitarian",
+            "duty-based", "rights-based", "virtue ethics", "mixed theories",
+            "consent", "end of life", "transplantation", "abortion", "reproductive medicine",
+        ],
+        "medical_transplantation_hta2004": [
+            "law and medicine", "transplantation", "organ donation", "human tissue act 2004",
+            "human tissue authority", "appropriate consent", "deemed consent",
+            "deceased donor", "living donor", "section 32", "section 33",
+            "conditional donation", "directed donation", "requested allocation",
+            "commercial dealings", "code a", "code f", "nhsbt",
+        ],
+        "medical_abortion_aa1967": [
+            "law and medicine", "abortion", "abortion act 1967",
+            "offences against the person act 1861", "infant life preservation act 1929",
+            "section 1(1)(a)", "section 1(1)(d)", "fetal abnormality",
+            "foetal abnormality", "two registered medical practitioners",
+            "good faith", "crowter", "jepson", "sarah catt", "crime and policing bill",
+        ],
+        "medical_reproductive_hfea": [
+            "law and medicine", "reproductive medicine", "assisted reproduction",
+            "human fertilisation and embryology act 1990", "human fertilisation and embryology act 2008",
+            "hfea", "ivf", "embryo", "section 13(5)", "welfare of the child",
+            "parenthood", "donor anonymity", "preimplantation genetic testing",
+            "pgt", "saviour siblings", "embryo research", "evans", "quintavalle",
+        ],
         "aviation_passenger_injury_montreal": [
             "aviation law", "montreal convention", "warsaw convention",
             "international carriage by air", "article 17", "article 21", "article 29",
@@ -6567,6 +6806,12 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             "civil procedure", "civil procedure rules", "overriding objective", "active case management",
             "disclosure", "costs budgeting", "cost control", "sanctions for non-compliance",
             "mitchell", "denton", "part 36", "adr", "halsey", "pgf", "access to justice",
+        ],
+        "generic_mediation_law": [
+            "mediation", "international commercial mediation", "mediated settlement",
+            "singapore convention", "agreement to mediate", "confidentiality",
+            "without prejudice", "mandatory mediation", "adr", "halsey", "churchill",
+            "farm assist", "ohpen",
         ],
         "patent_validity_infringement_ownership": [
             "patent law", "patents act 1977", "patentability", "novelty", "inventive step",
@@ -6991,8 +7236,10 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "generic_planning_law": [
             "planning permission", "material considerations", "traffic impact", "flood risk",
             "conservation area", "town and country planning act 1990", "section 70(2)",
-            "planning and compulsory purchase act 2004", "section 38(6)", "section 72(1)",
-            "procedural fairness", "consultation", "late publication", "wednesbury",
+            "planning and compulsory purchase act 2004", "section 38(6)", "section 288",
+            "national planning policy framework", "nppf", "planning conditions",
+            "legitimate expectation", "reasons", "section 72(1)", "procedural fairness",
+            "consultation", "late publication", "wednesbury", "statutory review",
             "judicial review", "quashing order",
         ],
         "succession_wills_validity": [
@@ -7090,6 +7337,26 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             "article 102", "competition act 1998", "trade mark", "trademark", "passing off",
             "rome i", "rome ii", "private international law", "tax law", "gdpr",
             "occupiers' liability", "fiduciary", "landlord and tenant",
+        ],
+        "medical_ethics": [
+            "article 102", "competition act 1998", "trade mark", "trademark", "passing off",
+            "rome i", "rome ii", "private international law", "tax law", "gdpr",
+            "occupiers' liability", "fiduciary", "landlord and tenant",
+        ],
+        "medical_transplantation_hta2004": [
+            "article 102", "competition act 1998", "trade mark", "trademark", "passing off",
+            "rome i", "rome ii", "private international law", "tax law", "gdpr",
+            "occupiers' liability", "landlord and tenant", "generic property rights",
+        ],
+        "medical_abortion_aa1967": [
+            "article 102", "competition act 1998", "trade mark", "trademark", "passing off",
+            "rome i", "rome ii", "private international law", "tax law", "gdpr",
+            "occupiers' liability", "landlord and tenant", "us constitutional abortion law",
+        ],
+        "medical_reproductive_hfea": [
+            "article 102", "competition act 1998", "trade mark", "trademark", "passing off",
+            "rome i", "rome ii", "private international law", "tax law", "gdpr",
+            "occupiers' liability", "landlord and tenant", "surrogacy law unless prompted",
         ],
         "aviation_passenger_injury_montreal": [
             "refugee convention", "non-refoulement", "hague-visby", "bill of lading",
@@ -7393,6 +7660,10 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "maritime_cargo_damage": {"statutes": 2, "cases": 3, "secondary": 1},
         "medical_end_of_life_mca2005": {"statutes": 2, "cases": 4, "secondary": 1},
         "medical_consent_capacity": {"statutes": 1, "cases": 4, "secondary": 1},
+        "medical_ethics": {"statutes": 0, "cases": 2, "secondary": 2},
+        "medical_transplantation_hta2004": {"statutes": 1, "cases": 2, "secondary": 2},
+        "medical_abortion_aa1967": {"statutes": 2, "cases": 2, "secondary": 2},
+        "medical_reproductive_hfea": {"statutes": 1, "cases": 2, "secondary": 2},
         "aviation_passenger_injury_montreal": {"statutes": 2, "cases": 3, "secondary": 1},
         "clinical_negligence_causation_loss_of_chance": {"statutes": 0, "cases": 5, "secondary": 1},
         "employment_equal_pay_flexible_working": {"statutes": 2, "cases": 4, "secondary": 1},
@@ -7406,6 +7677,7 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "evidence_admissibility_fair_trial": {"statutes": 2, "cases": 4, "secondary": 1},
         "criminal_evidence_hearsay": {"statutes": 1, "cases": 3, "secondary": 1},
         "civil_procedure_justice_balance": {"statutes": 2, "cases": 4, "secondary": 1},
+        "generic_mediation_law": {"statutes": 1, "cases": 3, "secondary": 2},
         "patent_validity_infringement_ownership": {"statutes": 2, "cases": 4, "secondary": 1},
         "prison_law_state_treatment_review": {"statutes": 2, "cases": 4, "secondary": 1},
         "education_school_exclusion_send": {"statutes": 3, "cases": 2, "secondary": 1},
@@ -7529,6 +7801,10 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "maritime_cargo_damage": "COGSA/Hague-Visby text | leading cargo-damage or seaworthiness authority | maritime-carriage commentary",
         "medical_end_of_life_mca2005": "Mental Capacity/Suicide statute text | leading end-of-life case | core medical-law commentary",
         "medical_consent_capacity": "Mental Capacity/consent statute text | leading consent/capacity case | core medical-law commentary",
+        "medical_ethics": "medical-ethics framework | autonomy/refusal case authority | core course commentary",
+        "medical_transplantation_hta2004": "Human Tissue Act / HTA Code text | leading donation/allocation authority | transplantation commentary",
+        "medical_abortion_aa1967": "Abortion/OAPA statutory text | leading fetal-abnormality or abortion authority | abortion-law commentary",
+        "medical_reproductive_hfea": "HFEA statutory and Code material | leading embryo/consent/PGT authority | reproductive-medicine commentary",
         "aviation_passenger_injury_montreal": "Montreal/Warsaw convention text | leading air-carriage passenger-injury authority | aviation-law commentary",
         "clinical_negligence_causation_loss_of_chance": "leading clinical-negligence causation case | loss-of-chance/material-contribution authority | core tort/medical-negligence commentary",
         "employment_equal_pay_flexible_working": "Equality Act equal-pay/discrimination provision | leading equal-pay/flexible-working authority | core employment-discrimination commentary",
@@ -7539,6 +7815,7 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "equality_substantive_framework": "Equality Act provision | leading discrimination/positive-action authority | equality-law commentary",
         "employment_restrictive_covenants": "leading restraint-of-trade case | modern restrictive-covenant authority | core employment commentary",
         "civil_procedure_justice_balance": "CPR text | leading sanctions/ADR/costs authority | civil-justice commentary",
+        "generic_mediation_law": "mediation convention/rules or ADR procedural material | leading mediation/confidentiality/ADR costs authority | mediation-law commentary",
         "patent_validity_infringement_ownership": "Patents Act text | leading novelty/inventive-step/infringement authority | patent-law commentary",
         "prison_law_state_treatment_review": "prison-rule/HRA text | leading prison-rights/judicial-review authority | prison-law commentary",
         "education_school_exclusion_send": "education/exclusion/SEND statutory text | leading procedural-fairness or school-rights authority | education-law commentary",
@@ -8016,6 +8293,28 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
     }
 
     topic_guidance_exact: Dict[str, Dict[str, List[str]]] = {
+        "generic_mediation_law": {
+            "issue_bank": [
+                "identify whether the dispute concerns an agreement to mediate, mediation confidentiality, enforcement of a mediated settlement, mediator conduct, or mandatory ADR",
+                "separate the non-binding mediation process from any binding settlement agreement produced by mediation",
+                "for cross-border enforcement, test international/commercial/written/signed settlement requirements before defences",
+                "for confidentiality, distinguish contractual confidentiality, without-prejudice privilege, mediator compellability, and public-policy exceptions",
+            ],
+            "must_avoid": [
+                "do not treat mediation as arbitration or import arbitral award enforcement rules without explaining the difference",
+                "do not praise mediation generically without stating the legal consequence for enforcement, costs, confidentiality, or access to court",
+                "do not assume a mediated settlement is enforceable without checking formal route and exclusions",
+            ],
+            "marker_criticism": [
+                "mediation answers improve when they distinguish process values from legal enforceability and keep confidentiality, settlement contract, and ADR pressure in separate tracks",
+            ],
+            "counterargument_focus": [
+                "whether stronger mandatory or treaty-based mediation enforcement promotes access to justice and settlement certainty or undermines voluntariness and procedural fairness",
+            ],
+            "remedy_focus": [
+                "state stay/order to mediate, costs consequences, settlement enforcement, confidentiality ruling, or ordinary contract/arbitration/litigation fallback separately",
+            ],
+        },
         "competition_abuse_dominance": {
             "issue_bank": [
                 "reduce market definition and dominance to the level genuinely needed on the facts",
@@ -8227,6 +8526,8 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
                 "separate misleading statements, consultation duties, and trustee/employer obligations into distinct routes",
                 "check the scheme wording first and do not assume statutory definitions automatically carry into trust deed or rules language unless incorporation is shown",
                 "separate amendment-power/proper-purpose/good-faith review from section 67 accrued-rights analysis; one route may constrain the change before the other is reached",
+                "where NRA, equalisation, sex-differentiated factors, or gender-recognition facts appear, analyse scheme wording, statutory equality exceptions, and current authority in separate steps",
+                "where investment policy or ESG appears, separate financially material risk from non-financial preference and test scheme purpose, Pensions Act 2004 section 255, financial detriment, and beneficiary support distinctly",
                 "state the practical loss/remedy difficulty explicitly: causation, actuarial counterfactuals, reliance, and the form of redress",
                 "end with which claim routes are strongest and where proof is weakest",
             ],
@@ -8234,6 +8535,8 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
                 "do not treat pensions as generic trusts law without scheme-specific statutory protection and communication duties",
                 "do not assume that a pensions term means the same thing in the scheme rules merely because legislation uses similar language",
                 "do not treat section 67 as exhausting the amendment question if amendment-power limits, proper-purpose doctrine, or good-faith constraints are doing separate work",
+                "do not assume section 62 automatically changes every NRA outcome or that a gender recognition certificate necessarily changes actuarial sex factors without testing the current equality-law position",
+                "do not treat Law Commission non-financial-factor analysis or Palestine-style authority as a shortcut without testing the scheme type, scheme purpose, detriment, and beneficiary-support limits",
                 "do not assume that unfair communications automatically prove legally recoverable loss without explaining reliance and quantification",
             ],
             "marker_criticism": [
@@ -8353,18 +8656,28 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
         "generic_planning_law": {
             "issue_bank": [
                 "identify the challenge route first: planning merits, legality, or judicial review of the permission",
+                "use TCPA 1990 section 70(2) and PCPA 2004 section 38(6) as the statutory spine: decision-maker discretion exists, but it operates inside development-plan primacy and material-consideration control",
+                "treat the NPPF as national policy and a material consideration, not as a free-standing statutory code that automatically overrides the development plan",
+                "if conditions are relevant, apply the planning-condition validity logic separately from the permission decision itself and explain whether the condition controls impact or unlawfully rewrites the scheme",
+                "separate legitimate expectation, reasons, and consultation fairness from substantive planning judgment; each is a legality question with a different threshold",
+                "distinguish ordinary judicial review from any statutory planning-review route and identify the realistic remedy, especially quashing, remittal, or refusal of relief",
                 "separate development-plan compliance, material considerations, procedural fairness, and irrationality rather than blending them together",
                 "state clearly what the authority had to consider and what the court will and will not revisit on the merits",
                 "finish with the realistic public-law remedy and the likely practical consequence for the permission",
             ],
             "must_avoid": [
                 "do not turn a planning challenge into a generic judicial-review answer with no planning-specific duties or statutory hooks",
+                "do not let Arbitration Act section 70 or generic public-law section references displace a planning-law prompt built around TCPA 1990 section 70(2)",
+                "do not treat the NPPF, the development plan, material considerations, reasons, legitimate expectation, and review route as interchangeable discretion labels",
                 "do not treat traffic, flood risk, heritage impact, and consultation fairness as one undifferentiated complaint",
             ],
             "marker_criticism": [
                 "planning answers improve when they distinguish planning merits from legality review and tie each alleged omission to a concrete statutory or common-law requirement",
             ],
             "counterargument_focus": [
+                "whether plan-led certainty is preserved in practice or diluted by broad material-consideration discretion and national policy weight",
+                "whether the NPPF improves consistency or gives central policy too much practical influence over local plan-led decision-making",
+                "whether reasons, legitimate expectations, and consultation duties genuinely discipline discretion or mainly produce procedural litigation around the edges of planning merits",
                 "whether the alleged flaw is a true failure to consider a material planning matter or merely disagreement with the planning judgment reached",
                 "whether late publication of documents denied a meaningful opportunity to participate or was cured by the overall procedure viewed fairly",
             ],
@@ -9023,6 +9336,77 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
                 "consent-and-capacity answers improve when they classify the route correctly before discussing autonomy and best interests",
                 "higher-mark answers separate battery from negligence more sharply and explain why scope-of-consent issues are not just disclosure-risk disputes",
                 "higher-mark answers also keep confidentiality, transfusion/best-interests, and material-risk causation as separate questions with separate remedies",
+            ],
+        },
+        "medical_ethics": {
+            "issue_bank": [
+                "identify the ethical theory or autonomy claim before moving to doctrinal examples",
+                "use only a small number of course topics as examples in course-bound mode, usually two or three",
+                "define dignity, autonomy, sanctity of life, utilitarian, duty-based, rights-based, or virtue-ethics terms before relying on them",
+                "connect the ethical claim to concrete legal rules in consent, end-of-life, transplantation, abortion, or reproductive medicine",
+            ],
+            "must_avoid": [
+                "do not write a free-standing philosophy essay detached from the legal rules",
+                "do not cover every syllabus topic shallowly when the question calls for critical evaluation",
+                "do not import neuro-interventions, mental health law, public health law, or clinical negligence into course-bound answers unless expressly asked",
+            ],
+            "marker_criticism": [
+                "Law and Medicine essays improve when they define key terms early, select fewer examples, and defend a clear view rather than surveying the whole syllabus",
+                "course-bound autonomy essays should use syllabus examples deeply, not speculative topics beyond the module",
+            ],
+        },
+        "medical_transplantation_hta2004": {
+            "issue_bank": [
+                "start with the Human Tissue Act 2004 framework and the meaning of appropriate consent",
+                "separate deceased donation, living donation, allocation, and commercialisation",
+                "for deceased donors, apply the section 3 hierarchy and deemed-consent limits before family objections",
+                "for living donors, separate common-law/MCA removal authority, section 1 storage/use consent, and section 33 HTA approval",
+                "for reform essays, focus commercialisation on section 32 rather than drifting into general body-property theory",
+            ],
+            "must_avoid": [
+                "do not say the law rejects all directed transplantation: living donation is commonly directed and requested allocation may be permitted after death",
+                "do not treat conditional donation and requested allocation as the same issue",
+                "do not centre course-bound answers on property rights in body parts unless the prompt expressly asks",
+            ],
+            "marker_criticism": [
+                "transplantation answers lose marks when they assert that directed donation is simply rejected without explaining living donation, deceased donation policy, and requested allocation",
+                "commercialisation analysis should cite the statutory prohibition directly, especially Human Tissue Act 2004 section 32 where relevant",
+            ],
+        },
+        "medical_abortion_aa1967": {
+            "issue_bank": [
+                "start with the criminal background, then explain the Abortion Act 1967 gateway",
+                "distinguish section 1(1)(a) social ground from section 1(1)(d) fetal-abnormality ground",
+                "address two-doctor certification and good faith where the legality gateway is contested",
+                "for fetal-abnormality reform, analyse moral status, disability-discrimination objections, Crowter, Jepson, and possible time-limit or information reforms",
+                "when current reform is raised, separate decriminalisation from reform of fetal-abnormality grounds",
+            ],
+            "must_avoid": [
+                "do not say the fetus has no legal or moral status without defining the claim and tying it to the specific provision",
+                "do not collapse all Abortion Act grounds into one generic autonomy argument",
+                "do not rely on US abortion doctrine in an English Law and Medicine answer unless the prompt expressly asks for comparison",
+            ],
+            "marker_criticism": [
+                "abortion answers improve when they identify the precise statutory ground and explain why the reform objection attaches to that ground",
+                "claims about academic commentary, disability discrimination, fetal status, or decriminalisation need named support rather than vague attribution",
+            ],
+        },
+        "medical_reproductive_hfea": {
+            "issue_bank": [
+                "start with the HFEA 1990/2008 regulatory scheme and the HFEA licensing role",
+                "separate consent to embryo/gamete use and storage from welfare-of-child screening, parenthood, PGT, saviour siblings, and embryo research",
+                "for consent disputes, apply Schedule 3 and Evans before making autonomy claims",
+                "for welfare-of-child analysis, apply section 13(5), the Code of Practice, non-discrimination, supportive parenting, and medicalisation critique",
+                "for PGT and embryo research, distinguish authorised testing, sex selection, tissue typing, moral status, and the 14-day research limit",
+            ],
+            "must_avoid": [
+                "do not confuse the 1990 Act as amended with the 2008 Act parenthood provisions",
+                "do not treat welfare of the child as a simple best-interests test for an existing child",
+                "do not centre surrogacy in course-bound answers because the course materials expressly exclude it unless the prompt requires it",
+            ],
+            "marker_criticism": [
+                "reproductive-medicine essays improve when they choose a small number of concrete regulatory pressure points rather than attacking the whole HFEA scheme generically",
+                "section 13(5) analysis should explain clinical discretion and the non-identity/medicalisation problem rather than merely saying welfare matters",
             ],
         },
         "aviation_passenger_injury_montreal": {
@@ -10420,6 +10804,19 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
                 or "in your answer, you should" in compact_low
             ):
                 capture_mode = True
+                inline_match = re.search(
+                    r"(?i)\b(?:in your answer,\s*(?:discuss|consider)|in particular,\s*consider|in your answer,\s*you should)\b[:\s]*(.+)$",
+                    s,
+                )
+                if inline_match:
+                    inline_ask = re.sub(r"[:;\.\s]+$", "", inline_match.group(1).strip())
+                    if inline_ask:
+                        key = inline_ask.lower()
+                        if key not in seen:
+                            seen.add(key)
+                            asks.append(inline_ask)
+                        if len(asks) >= 8:
+                            break
                 continue
             if compact_low.startswith(("you should support your answer", "you should conclude", "support your answer", "you should also")):
                 capture_mode = False
@@ -13511,6 +13908,10 @@ def _build_legal_answer_quality_gate(query: str, profile: Dict[str, Any]) -> str
         "87) Where a recent statute, commencement, or appellate reform materially changes the law, answer from the current post-reform position rather than repeating the superseded pre-reform framework.",
         "88) Distinguish between points that are merely arguable, points that are realistically dangerous, and points that are mostly forensic noise. Do not flatten all objections to the same weight.",
         "89) When invoking a recent reform package, identify which reform actually changes the analysis on these facts and which reforms are only background context; do not dump the whole package without triage.",
+        "90) Apply supervisor/module feedback at rule level. Convert formative, summative, and marked-solution comments into reusable quality controls, but do not carry forward document-specific private facts or marker wording.",
+        "91) Use authority hierarchy and pinpoint discipline. Prefer binding and directly on-point authority, check whether authority has been overtaken, and include paragraph/page pinpoints only where the pinpoint is verified for the exact proposition.",
+        "92) If the answer turns on calculations, dates, scheme wording, eligibility thresholds, or missing facts, state the assumption and run the consequence explicitly rather than burying it in narrative prose.",
+        "93) Before finalising, map the answer back to every express prompt limb; do not let broad legal context displace specific asks about policy instruments, reasons, remedies, review routes, or statutory provisions.",
     ]
 
     if mode == "problem":
@@ -13562,6 +13963,10 @@ def _build_legal_answer_quality_gate(query: str, profile: Dict[str, Any]) -> str
         general_lines.append("Prompt-map focus: in the introduction, state explicitly which limbs (a)/(b)/(c) you cover, then use matching sub-headings so the examiner can see each ask answered.")
     if prompt_map_asks:
         general_lines.append("Prompt-map focus: mirror the actual asks from the question in order and make sure each is answered distinctly: " + "; ".join(prompt_map_asks[:5]) + ".")
+
+    subject_guide = _subject_guide_excerpt_for_query(q, profile, max_lines=44)
+    if subject_guide:
+        general_lines.append(subject_guide)
 
     if topic == "medical_end_of_life_mca2005" or (
         topic != "medical_consent_capacity"
@@ -13731,6 +14136,8 @@ def _build_legal_answer_quality_gate(query: str, profile: Dict[str, Any]) -> str
     elif topic == "generic_planning_law":
         general_lines.extend([
             "Planning focus: start with the planning-specific legal hooks before general judicial-review language, especially development-plan status, material considerations, and any heritage or consultation duty.",
+            "Planning focus: for essay prompts, build the spine around TCPA 1990 section 70(2), PCPA 2004 section 38(6), the National Planning Policy Framework (NPPF) as material policy, planning conditions, legitimate expectation, reasons, and the judicial/statutory review divide.",
+            "Planning focus: explain the balance directly: the development plan creates plan-led discipline, material considerations preserve flexibility, and local authority discretion chooses the weight subject to legality not merits review.",
             "Planning focus: distinguish disagreement with planning merits from an actual legal flaw in the decision-making process; the court polices legality, not the planning balance itself.",
             "Planning focus: keep traffic, flood risk, conservation-area impact, and late publication complaints analytically separate, then state the realistic remedy and whether the permission is likely to be quashed.",
         ])
@@ -15464,6 +15871,22 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
             ),
         ]
 
+    if detected_topic == "generic_mediation_law":
+        return [
+            (
+                "Mediation process, clause, and confidentiality",
+                f"{txt}\n\nFOCUS: identify the mediation issue first. Separate any agreement to mediate, confidentiality, without-prejudice protection, mediator compellability, and costs consequences."
+            ),
+            (
+                "Mediated settlement status and enforcement",
+                f"{txt}\n\nFOCUS: keep the non-binding nature of mediation distinct from the binding force of a written settlement. Analyse ordinary contract enforcement and, for cross-border commercial settlements, the Singapore Convention route where relevant."
+            ),
+            (
+                "Mandatory ADR, fairness, and practical outcome",
+                f"{txt}\n\nFOCUS: evaluate whether pressure or orders to mediate are proportionate and access-to-court compatible, then conclude with the practical route: mediate, enforce settlement, litigate, arbitrate, or resist enforcement."
+            ),
+        ]
+
     if detected_topic == "international_commercial_arbitration" and is_problem and any(
         k in txt_lower for k in [
             "mediated settlement", "singapore convention", "without prejudice",
@@ -15622,7 +16045,7 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
     ):
         return [
             (
-                "Execution defects and enforceability of the credit agreement",
+                "Credit agreement enforceability and execution defects",
                 f"{txt}\n\nFOCUS: identify first whether the agreement is properly executed and what that means for enforceability. Keep this separate from wider unfairness and supplier-misconduct complaints."
             ),
             (
@@ -15630,7 +16053,7 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
                 f"{txt}\n\nFOCUS: analyse the home-visit pressure, misleading assurances, and supplier performance through the unfair-relationship route rather than treating section 140A as a generic fairness slogan."
             ),
             (
-                "Linked lender liability for defective installation and false assurances",
+                "Linked supplier liability and lender liability for defective installation and false assurances",
                 f"{txt}\n\nFOCUS: keep the linked-lender route separate from section 140A. Explain how supplier representations and defective work may expose the lender, and what statutory route does the real work."
             ),
             (
@@ -17312,10 +17735,29 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
         ]
 
     if detected_topic == "generic_planning_law":
+        if not is_problem:
+            return [
+                (
+                    "Development plan primacy and section 70(2) material considerations",
+                    f"{txt}\n\nFOCUS: build the statutory framework around TCPA 1990 section 70(2) and PCPA 2004 section 38(6). Explain how the development plan anchors the decision while material considerations preserve legally controlled flexibility."
+                ),
+                (
+                    "NPPF, local authority discretion, and planning conditions",
+                    f"{txt}\n\nFOCUS: treat the National Planning Policy Framework as national policy and a material consideration, not a substitute for the statutory plan-led test. Analyse how local authority discretion weighs policy, facts, and conditions without becoming merits immunity."
+                ),
+                (
+                    "Legitimate expectation, reasons, and procedural legality",
+                    f"{txt}\n\nFOCUS: keep legitimate expectation, reasons, consultation, and procedural fairness separate. Explain when each constrains planning discretion and why each is different from simple disagreement with the planning balance."
+                ),
+                (
+                    "Judicial/statutory review and the limits of court control",
+                    f"{txt}\n\nFOCUS: distinguish judicial review from any statutory planning-review route, then evaluate why courts police legality, reasons, relevance, fairness, and irrationality rather than substituting their own planning judgment."
+                ),
+            ]
         return [
             (
                 "Planning framework, development plan, and material considerations",
-                f"{txt}\n\nFOCUS: identify the statutory planning framework first, including the role of the development plan, section 70(2) material considerations, and any heritage duty such as the conservation-area obligation."
+                f"{txt}\n\nFOCUS: identify the statutory planning framework first, including the role of the development plan, section 70(2) material considerations, section 38(6), and any heritage duty such as the conservation-area obligation."
             ),
             (
                 "Procedural fairness, consultation, and late documents",
@@ -17323,7 +17765,7 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
             ),
             (
                 "Irrationality, remedy, and realistic outcome",
-                f"{txt}\n\nFOCUS: separate irrationality from simple disagreement on planning merits, then end with the realistic judicial-review remedy and whether the permission is likely to be quashed or remitted."
+                f"{txt}\n\nFOCUS: separate irrationality from simple disagreement on planning merits, then end with the realistic judicial/statutory review remedy and whether the permission is likely to be quashed or remitted."
             ),
         ]
 
@@ -17385,16 +17827,95 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
             ]
         return [
             (
-                "From paternalism to patient autonomy",
-                f"{txt}\n\nFOCUS: trace the move from medical paternalism toward patient-centred consent standards, and explain why autonomy rather than professional convenience became the dominant value."
+                "Course-bound consent framework",
+                f"{txt}\n\nFOCUS: if this is a Law and Medicine course answer, keep the taught structure central: capacity, information in the broad-awareness sense, voluntariness, and public-policy limits. Do not make Montgomery/negligence the centre unless the prompt expressly asks for negligence or material-risk disclosure."
             ),
             (
-                "Montgomery and informed risk disclosure",
-                f"{txt}\n\nFOCUS: analyse Montgomery v Lanarkshire Health Board carefully: material risk, reasonable alternative treatments, the significance of the particular patient, and how far the decision displaced Bolam-style deference in consent cases."
+                "Adults, children, and refusal",
+                f"{txt}\n\nFOCUS: distinguish capacitous adults, adults lacking capacity under the MCA, Gillick-competent children, 16/17-year-olds, and the limits on children's refusal. Use Re T, Re B, Gillick, Re W, and E v Northern Care Alliance where available."
             ),
             (
                 "Ongoing tensions and limits",
-                f"{txt}\n\nFOCUS: evaluate where professional judgment still matters, including therapeutic exception, emergency/capacity problems, and the practical limits of autonomy-protective consent doctrine. End with a direct verdict on whether autonomy is adequately protected."
+                f"{txt}\n\nFOCUS: evaluate where autonomy is limited by public policy, incapacity, best interests, vulnerable-adult pressure, or the court's protective jurisdiction. End with a direct verdict on whether consent law reflects bodily autonomy convincingly."
+            ),
+        ]
+
+    if detected_topic == "medical_ethics":
+        return [
+            (
+                "Key ethical term and thesis",
+                f"{txt}\n\nFOCUS: define the controlling ethical term or theory early, such as autonomy, dignity, sanctity of life, utilitarianism, duty-based theory, rights-based theory, or virtue ethics. State the thesis the answer will defend."
+            ),
+            (
+                "Focused legal examples from the course",
+                f"{txt}\n\nFOCUS: use two or three syllabus examples in depth rather than surveying everything. Tie each example to a concrete legal rule from consent, end-of-life decisions, transplantation, abortion, or reproductive medicine."
+            ),
+            (
+                "Evaluation and reform position",
+                f"{txt}\n\nFOCUS: test the strongest counterargument and conclude whether the law reflects the ethical principle consistently, defensibly, or only partially."
+            ),
+        ]
+
+    if detected_topic == "medical_transplantation_hta2004":
+        if is_problem:
+            return [
+                (
+                    "Treatment and recipient decision-making",
+                    f"{txt}\n\nFOCUS: if the recipient is a child or incapacitated adult, identify the lawful treatment route separately from donation law: consent, best interests, parental responsibility, court order, or necessity."
+                ),
+                (
+                    "Living donor route",
+                    f"{txt}\n\nFOCUS: for any living donor, separate common-law or MCA authority for removal, HTA 2004 section 1 consent for storage/use, and section 33 approval for transplantable material. Address capacity, interviews, HTA approval, and court approval where needed."
+                ),
+                (
+                    "Deceased donor route and allocation",
+                    f"{txt}\n\nFOCUS: for deceased donation, apply the HTA 2004 section 3 hierarchy, deemed consent limits, qualifying-relative evidence, family objections, and any requested-allocation policy issue. End with the hospital's lawful options."
+                ),
+            ]
+        return [
+            (
+                "HTA consent framework",
+                f"{txt}\n\nFOCUS: start with the Human Tissue Act 2004 structure and appropriate consent. Keep deceased donation, living donation, allocation, and commercialisation conceptually separate."
+            ),
+            (
+                "Donation, allocation, and fairness",
+                f"{txt}\n\nFOCUS: analyse opt-out/deemed consent, family objection, conditional donation, directed donation, and requested allocation without falsely saying all directed donation is rejected."
+            ),
+            (
+                "Commercialisation and reform",
+                f"{txt}\n\nFOCUS: if reform is asked, anchor commercialisation in HTA 2004 section 32 and evaluate dignity, exploitation, scarcity, equity, and the case for or against regulated reward."
+            ),
+        ]
+
+    if detected_topic == "medical_abortion_aa1967":
+        return [
+            (
+                "Criminal framework and statutory gateway",
+                f"{txt}\n\nFOCUS: start with the criminal background under OAPA 1861 and ILPA 1929, then explain how the Abortion Act 1967 creates the relevant exception or gateway."
+            ),
+            (
+                "Precise Abortion Act ground",
+                f"{txt}\n\nFOCUS: identify the exact ground in issue. Keep section 1(1)(a) social-ground discretion distinct from section 1(1)(d) fetal abnormality, and address two-doctor good-faith certification where relevant."
+            ),
+            (
+                "Critique and reform",
+                f"{txt}\n\nFOCUS: evaluate the specific reform question using moral status, autonomy, disability discrimination, Crowter, Jepson, decriminalisation, time limits, or information duties only where they fit the prompt."
+            ),
+        ]
+
+    if detected_topic == "medical_reproductive_hfea":
+        return [
+            (
+                "HFEA regulatory architecture",
+                f"{txt}\n\nFOCUS: start with the Human Fertilisation and Embryology Act 1990 as amended, the HFEA licensing role, and the exact activity being regulated."
+            ),
+            (
+                "Consent, welfare, and parenthood",
+                f"{txt}\n\nFOCUS: separate Schedule 3 consent to embryo/gamete use or storage, section 13(5) welfare-of-child screening, donor information, and legal parenthood under the 2008 Act."
+            ),
+            (
+                "PGT, saviour siblings, embryo research, and reform",
+                f"{txt}\n\nFOCUS: if the question concerns fitness for purpose, evaluate concrete pressure points such as PGT, sex selection, tissue typing, embryo research, moral status, clinical discretion, and medicalisation rather than attacking the scheme generically."
             ),
         ]
 
@@ -18785,6 +19306,8 @@ def _subissue_queries_for_unit(unit_label: str, unit_text: str) -> List[Tuple[st
         "medical law", "end of life", "end-of-life", "assisted suicide", "assisted dying",
         "suicide act 1961", "section 2", "airedale", "bland",
         "mental capacity act", "mca 2005", "best interests", "canh",
+        "advance refusal", "advance refusals", "advance decision to refuse",
+        "ventilator", "ventilation", "life-sustaining treatment", "life sustaining treatment",
         "clinically assisted nutrition and hydration", "locked-in syndrome",
         "persistent vegetative state", "pvs", "article 8", "nicklinson", "pretty",
     ]
@@ -20474,7 +20997,7 @@ def _query_type_for_unit_kind(unit_kind: Optional[str], target_words: Optional[i
 
 def _chunk_count_for_query_type(query_type: str, target_words: Optional[int] = None) -> int:
     chunk_count = QUERY_CHUNK_CONFIG.get(query_type, 10)
-    if target_words is not None and int(target_words or 0) <= 800:
+    if target_words is not None and 0 < int(target_words or 0) <= 800:
         chunk_count = min(chunk_count, 6 if FAST_GENERATION_MODE else 8)
     return chunk_count
 
@@ -23267,14 +23790,15 @@ def should_use_google_search_grounding(message: str, rag_context: Optional[str] 
         dict with:
         - 'use_google_search': bool - whether to emphasize Google Search
         - 'reason': str - reason for using Google Search
-        - 'enforce_oscola': bool - whether to enforce OSCOLA citations for Google sources
+        - 'enforce_oscola': bool - whether to enforce the default OSCOLA guard for Google sources
+          unless the active request explicitly selects another citation style.
     """
     msg_lower = message.lower()
     
     result = {
         'use_google_search': False,
         'reason': None,
-        'enforce_oscola': True  # Always enforce OSCOLA for academic integrity
+        'enforce_oscola': True  # Default guard; active citation-style overrides still apply downstream.
     }
     
     # Indicators that Google Search would be beneficial
@@ -23322,7 +23846,7 @@ def should_use_google_search_grounding(message: str, rag_context: Optional[str] 
     
     if result['use_google_search']:
         print(f"[GOOGLE SEARCH] Enabled - Reason: {result['reason']}")
-        print(f"[GOOGLE SEARCH] OSCOLA citations will be enforced for all external sources")
+        print("[GOOGLE SEARCH] Active citation-style guard will be enforced for external sources")
     
     return result
 
@@ -23354,6 +23878,383 @@ def _is_rag_source_coverage_insufficient(
         return True, f"RAG context too short ({len(ctx)} chars < {min_chars})"
 
     return False, "RAG source coverage sufficient"
+
+
+def _online_search_provider_configured() -> bool:
+    provider = (os.getenv("LEGAL_AI_ONLINE_SEARCH_PROVIDER") or "").strip().lower()
+    if provider in {"off", "none", "disabled", "false", "0"}:
+        return False
+    if provider == "jina" and _truthy_env("LEGAL_AI_ALLOW_KEYLESS_JINA_SEARCH", "0"):
+        return True
+    return bool(
+        (os.getenv("BRAVE_SEARCH_API_KEY") or "").strip()
+        or ((os.getenv("GOOGLE_CSE_API_KEY") or os.getenv("GOOGLE_CUSTOM_SEARCH_API_KEY") or "").strip()
+            and (os.getenv("GOOGLE_CSE_ID") or os.getenv("GOOGLE_CUSTOM_SEARCH_ENGINE_ID") or os.getenv("GOOGLE_SEARCH_ENGINE_ID") or "").strip())
+        or (os.getenv("SERPAPI_API_KEY") or "").strip()
+        or (os.getenv("TAVILY_API_KEY") or "").strip()
+        or _truthy_env("LEGAL_AI_ALLOW_KEYLESS_JINA_SEARCH", "0")
+    )
+
+
+def _backend_online_search_fallback_decision(
+    *,
+    query: str,
+    rag_context: Optional[str],
+    retrieval_audit: Optional[Dict[str, Any]] = None,
+    local_index_coverage: Optional[Dict[str, Any]] = None,
+    legal_doc_requires_search: bool = False,
+    mcq_requires_search: bool = False,
+    is_continuation_turn: bool = False,
+    is_long_answer_turn: bool = False,
+) -> Dict[str, Any]:
+    """
+    Provider-neutral decision for when backend online search is required.
+    Gemini may satisfy this through its native Google Search grounding tool;
+    other providers need an appended online-search context block from a configured
+    backend search provider.
+    """
+    retrieval_audit = retrieval_audit or {}
+    local_index_coverage = local_index_coverage or {}
+    decision: Dict[str, Any] = {
+        "use_online_search": False,
+        "reason": "Disabled: RAG source coverage sufficient or non-legal query",
+        "coverage_insufficient": False,
+        "coverage_reason": None,
+        "search_provider_configured": _online_search_provider_configured(),
+    }
+    if not _is_legal_query_text(query):
+        decision["reason"] = "Disabled: non-legal query"
+        return decision
+
+    allow_online_fallback = bool(
+        legal_doc_requires_search
+        or mcq_requires_search
+        or (
+            ENABLE_BACKEND_ONLINE_SEARCH_FALLBACK
+            and ((not is_continuation_turn) or ALLOW_GOOGLE_FALLBACK_FOR_CONTINUATIONS)
+            and ((not is_long_answer_turn) or ALLOW_GOOGLE_FALLBACK_FOR_LONG_ANSWERS)
+        )
+    )
+    coverage_insufficient, coverage_reason = _is_rag_source_coverage_insufficient(rag_context)
+    heuristic = should_use_google_search_grounding(query, rag_context)
+    weak_retrieval = bool(retrieval_audit.get("needs_retry"))
+    local_index_thin = bool(local_index_coverage.get("thin"))
+
+    fallback_reasons: List[str] = []
+    if legal_doc_requires_search:
+        fallback_reasons.append(
+            "uploaded legal-document review/amend flow requires online verification alongside RAG"
+        )
+    if mcq_requires_search:
+        fallback_reasons.append(
+            "MCQ correction/generation mode requires search-backed verification alongside RAG for answer-key accuracy"
+        )
+    if coverage_insufficient:
+        fallback_reasons.append(coverage_reason)
+    if weak_retrieval:
+        fallback_reasons.append(
+            f"retrieval audit flagged weak/contaminated coverage (score={float(retrieval_audit.get('score', 0.0) or 0.0):.2f})"
+        )
+    if local_index_thin:
+        fallback_reasons.append(
+            f"local index coverage thin ({int(local_index_coverage.get('matched_count', 0) or 0)}/{int(local_index_coverage.get('target_count', 0) or 0)} core authority name hits)"
+        )
+    if fallback_reasons and (heuristic.get("use_google_search") or legal_doc_requires_search or mcq_requires_search):
+        fallback_reasons.append(f"heuristic={str(heuristic.get('reason') or 'weak-rag trigger')}")
+
+    decision.update(
+        {
+            "coverage_insufficient": coverage_insufficient,
+            "coverage_reason": coverage_reason,
+            "reason": "; ".join(dict.fromkeys(fallback_reasons)) if fallback_reasons else coverage_reason,
+            "use_online_search": bool(fallback_reasons and allow_online_fallback),
+        }
+    )
+    if not allow_online_fallback:
+        decision["use_online_search"] = False
+        if is_continuation_turn or is_long_answer_turn:
+            decision["reason"] = "Disabled for continuation/latency policy"
+        elif not ENABLE_BACKEND_ONLINE_SEARCH_FALLBACK:
+            decision["reason"] = "Disabled by ENABLE_BACKEND_ONLINE_SEARCH_FALLBACK"
+    return decision
+
+
+def _http_get_json(url: str, *, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=BACKEND_ONLINE_SEARCH_TIMEOUT_SEC) as resp:
+        raw = resp.read(1_000_000)
+    return json.loads(raw.decode("utf-8", errors="replace"))
+
+
+def _http_post_json(url: str, payload: Dict[str, Any], *, headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    data = json.dumps(payload).encode("utf-8")
+    req_headers = {"Content-Type": "application/json", **(headers or {})}
+    req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
+    with urllib.request.urlopen(req, timeout=BACKEND_ONLINE_SEARCH_TIMEOUT_SEC) as resp:
+        raw = resp.read(1_000_000)
+    return json.loads(raw.decode("utf-8", errors="replace"))
+
+
+def _append_search_result(
+    results: List[Dict[str, str]],
+    *,
+    title: Any,
+    url: Any,
+    snippet: Any,
+    limit: int,
+) -> None:
+    clean_title = re.sub(r"\s+", " ", str(title or "")).strip()
+    clean_url = str(url or "").strip()
+    clean_snippet = re.sub(r"\s+", " ", str(snippet or "")).strip()
+    if not clean_title and not clean_url and not clean_snippet:
+        return
+    if clean_url and any((item.get("url") or "") == clean_url for item in results):
+        return
+    results.append(
+        {
+            "title": clean_title[:240],
+            "url": clean_url[:500],
+            "snippet": clean_snippet[:700],
+        }
+    )
+    if len(results) > limit:
+        del results[limit:]
+
+
+def _run_backend_online_search(query: str, *, max_results: int = 6) -> Tuple[List[Dict[str, str]], str, Optional[str]]:
+    """
+    Execute a provider-neutral search using a configured backend search provider.
+    Supported env configurations:
+    - BRAVE_SEARCH_API_KEY
+    - GOOGLE_CSE_API_KEY/GOOGLE_CUSTOM_SEARCH_API_KEY + GOOGLE_CSE_ID/GOOGLE_CUSTOM_SEARCH_ENGINE_ID
+    - SERPAPI_API_KEY
+    - TAVILY_API_KEY
+    - LEGAL_AI_ONLINE_SEARCH_PROVIDER=jina plus LEGAL_AI_ALLOW_KEYLESS_JINA_SEARCH=1
+    """
+    query = re.sub(r"\s+", " ", (query or "")).strip()
+    if not query:
+        return [], "none", "empty search query"
+    provider = (os.getenv("LEGAL_AI_ONLINE_SEARCH_PROVIDER") or "auto").strip().lower()
+    if provider in {"off", "none", "disabled", "false", "0"}:
+        return [], provider, "backend online search disabled"
+
+    brave_key = (os.getenv("BRAVE_SEARCH_API_KEY") or "").strip()
+    google_key = (os.getenv("GOOGLE_CSE_API_KEY") or os.getenv("GOOGLE_CUSTOM_SEARCH_API_KEY") or "").strip()
+    google_cx = (
+        os.getenv("GOOGLE_CSE_ID")
+        or os.getenv("GOOGLE_CUSTOM_SEARCH_ENGINE_ID")
+        or os.getenv("GOOGLE_SEARCH_ENGINE_ID")
+        or ""
+    ).strip()
+    serpapi_key = (os.getenv("SERPAPI_API_KEY") or "").strip()
+    tavily_key = (os.getenv("TAVILY_API_KEY") or "").strip()
+    allow_jina = _truthy_env("LEGAL_AI_ALLOW_KEYLESS_JINA_SEARCH", "0")
+
+    candidates: List[str] = []
+    if provider != "auto":
+        candidates.append(provider)
+    else:
+        if brave_key:
+            candidates.append("brave")
+        if google_key and google_cx:
+            candidates.append("google_cse")
+        if serpapi_key:
+            candidates.append("serpapi")
+        if tavily_key:
+            candidates.append("tavily")
+        if allow_jina:
+            candidates.append("jina")
+
+    if not candidates:
+        return [], "none", "no backend online search provider configured"
+
+    encoded_query = urllib.parse.urlencode({"q": query})
+    last_error: Optional[str] = None
+    for candidate in candidates:
+        results: List[Dict[str, str]] = []
+        try:
+            if candidate == "brave":
+                if not brave_key:
+                    raise RuntimeError("BRAVE_SEARCH_API_KEY is not configured")
+                payload = _http_get_json(
+                    f"https://api.search.brave.com/res/v1/web/search?{encoded_query}&count={max_results}",
+                    headers={
+                        "Accept": "application/json",
+                        "X-Subscription-Token": brave_key,
+                    },
+                )
+                for item in ((payload.get("web") or {}).get("results") or []):
+                    _append_search_result(
+                        results,
+                        title=item.get("title"),
+                        url=item.get("url"),
+                        snippet=item.get("description") or item.get("snippet"),
+                        limit=max_results,
+                    )
+            elif candidate == "google_cse":
+                if not (google_key and google_cx):
+                    raise RuntimeError("Google CSE key/CX is not configured")
+                params = urllib.parse.urlencode(
+                    {"key": google_key, "cx": google_cx, "q": query, "num": min(max_results, 10)}
+                )
+                payload = _http_get_json(f"https://www.googleapis.com/customsearch/v1?{params}")
+                for item in payload.get("items") or []:
+                    _append_search_result(
+                        results,
+                        title=item.get("title"),
+                        url=item.get("link"),
+                        snippet=item.get("snippet"),
+                        limit=max_results,
+                    )
+            elif candidate == "serpapi":
+                if not serpapi_key:
+                    raise RuntimeError("SERPAPI_API_KEY is not configured")
+                params = urllib.parse.urlencode(
+                    {"engine": "google", "q": query, "api_key": serpapi_key, "num": max_results}
+                )
+                payload = _http_get_json(f"https://serpapi.com/search.json?{params}")
+                for item in payload.get("organic_results") or []:
+                    _append_search_result(
+                        results,
+                        title=item.get("title"),
+                        url=item.get("link"),
+                        snippet=item.get("snippet"),
+                        limit=max_results,
+                    )
+            elif candidate == "tavily":
+                if not tavily_key:
+                    raise RuntimeError("TAVILY_API_KEY is not configured")
+                payload = _http_post_json(
+                    "https://api.tavily.com/search",
+                    {
+                        "api_key": tavily_key,
+                        "query": query,
+                        "search_depth": "advanced",
+                        "max_results": max_results,
+                        "include_answer": False,
+                    },
+                )
+                for item in payload.get("results") or []:
+                    _append_search_result(
+                        results,
+                        title=item.get("title"),
+                        url=item.get("url"),
+                        snippet=item.get("content") or item.get("snippet"),
+                        limit=max_results,
+                    )
+            elif candidate == "jina":
+                if not allow_jina:
+                    raise RuntimeError("LEGAL_AI_ALLOW_KEYLESS_JINA_SEARCH is not enabled")
+                url = f"https://s.jina.ai/?{encoded_query}"
+                req = urllib.request.Request(url, headers={"Accept": "text/plain"})
+                with urllib.request.urlopen(req, timeout=BACKEND_ONLINE_SEARCH_TIMEOUT_SEC) as resp:
+                    text = resp.read(1_000_000).decode("utf-8", errors="replace")
+                blocks = re.split(r"\n(?=Title:|\[\d+\])", text)
+                for block in blocks:
+                    title_match = re.search(r"(?im)^Title:\s*(.+)$", block)
+                    url_match = re.search(r"(?im)^URL:\s*(https?://\S+)", block)
+                    snippet_match = re.search(r"(?ims)^(?:Description|Snippet|Content):\s*(.+)$", block)
+                    if title_match or url_match or snippet_match:
+                        _append_search_result(
+                            results,
+                            title=title_match.group(1) if title_match else "",
+                            url=url_match.group(1) if url_match else "",
+                            snippet=snippet_match.group(1) if snippet_match else block[:700],
+                            limit=max_results,
+                        )
+                if not results and text.strip():
+                    _append_search_result(
+                        results,
+                        title="Jina Search result excerpt",
+                        url=url,
+                        snippet=text[:3000],
+                        limit=max_results,
+                    )
+            else:
+                raise RuntimeError(f"unknown backend online search provider: {candidate}")
+
+            if results:
+                return results[:max_results], candidate, None
+            last_error = f"{candidate} returned no results"
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError, json.JSONDecodeError) as err:
+            last_error = f"{candidate}: {err}"
+            continue
+    return [], candidates[-1] if candidates else "none", last_error
+
+
+def _build_backend_online_search_query(query: str, retrieval_profile: Optional[Dict[str, Any]] = None) -> str:
+    retrieval_profile = retrieval_profile or {}
+    base = re.sub(r"\s+", " ", (query or "")).strip()
+    if len(base) > 700:
+        base = base[:700].rsplit(" ", 1)[0]
+    topic = str(retrieval_profile.get("topic") or "").replace("_", " ").strip()
+    must_cover = [str(x).strip() for x in (retrieval_profile.get("must_cover") or []) if str(x).strip()]
+    anchors = " ".join(must_cover[:5])
+    terms = " ".join(x for x in [topic, anchors] if x)
+    search_query = f"{base} {terms} legal authority case statute official source".strip()
+    return re.sub(r"\s+", " ", search_query)[:900]
+
+
+def _build_backend_online_search_context_block(
+    *,
+    query: str,
+    retrieval_profile: Optional[Dict[str, Any]],
+    citation_style: str,
+    reason: str,
+    max_results: int = 6,
+) -> Tuple[str, Dict[str, Any]]:
+    search_query = _build_backend_online_search_query(query, retrieval_profile)
+    results, provider, error = _run_backend_online_search(search_query, max_results=max_results)
+    meta = {
+        "provider": provider,
+        "error": error,
+        "result_count": len(results),
+        "query": search_query,
+    }
+    if not results:
+        block = "\n".join([
+            "[BACKEND ONLINE SEARCH FALLBACK UNAVAILABLE]",
+            f"RAG/index coverage triggered online search fallback, but no configured backend search provider returned results. Reason: {reason}",
+            f"Search provider status: {provider}; error: {error or 'no results'}",
+            "Do not claim online verification was performed. Stay within uploaded/retrieved materials and use calibrated wording for unsupported propositions.",
+        ])
+        return block, meta
+
+    lines = [
+        "[BACKEND ONLINE SEARCH CONTEXT - INTERNAL - DO NOT OUTPUT]",
+        f"Search provider: {provider}",
+        f"Search reason: {reason}",
+        f"Search query: {search_query}",
+        "Use this online-search context only to verify, strengthen, or fill missing legal authority coverage where indexed RAG is thin.",
+        f"Default/active citation rule: {_citation_style_guard_line(citation_style)}",
+        "Do not invent citations. If a result supplies only a title/snippet/URL, cite only what can be verified from that result and keep the claim calibrated.",
+        "",
+    ]
+    for idx, item in enumerate(results, start=1):
+        lines.extend([
+            f"Result {idx}:",
+            f"Title: {item.get('title') or '[untitled]'}",
+            f"URL: {item.get('url') or '[no url]'}",
+            f"Snippet: {item.get('snippet') or '[no snippet]'}",
+            "",
+        ])
+    lines.append("[END BACKEND ONLINE SEARCH CONTEXT]")
+    lines.append("[BACKEND ONLINE SEARCH CITATION RULE]")
+    lines.append(
+        f"Any authority taken from backend online search must be cited in {_citation_style_label(citation_style)} format immediately after the sentence it supports; default is inline OSCOLA unless the user expressly requested another style."
+    )
+    return "\n".join(lines), meta
+
+
+def _build_codex_online_search_fallback_block(*, reason: str, citation_style: str) -> str:
+    return "\n".join([
+        "[CODEX ONLINE SEARCH FALLBACK ACTIVE]",
+        f"RAG/index coverage triggered online search fallback. Reason: {reason}",
+        "No provider API is required for this path: the local Codex backend may use its own web-search capability when generating the answer.",
+        "Use online search only to verify, strengthen, or fill missing legal authority coverage.",
+        f"Any authority found through Codex online search must be cited in {_citation_style_label(citation_style)} format immediately after the sentence it supports; default is inline OSCOLA unless the user expressly requested another style.",
+        "Do not output search-tool syntax, raw search logs, or uncited URLs in the final answer.",
+    ])
 
 def get_or_create_chat(
     api_key: str,
@@ -23752,6 +24653,11 @@ def _shared_legal_backend_guide_excerpt() -> str:
         "marker-feedback repetition handling is mandatory",
         "feedback abstraction and privacy rule is mandatory",
         "feedback-led anti-vagueness sweep is mandatory",
+        "supervisor/module-feedback learning rule is mandatory",
+        "search-capability honesty rule",
+        "authority hierarchy and pinpoint discipline are mandatory",
+        "assumption and calculation discipline is mandatory",
+        "question-map coverage is mandatory",
         "implicit-question clarity rule is mandatory",
         "comparative and superlative claims must be quantified or calibrated",
         "coined / literature-specific term attribution rule is mandatory",
@@ -23772,9 +24678,226 @@ def _shared_legal_backend_guide_excerpt() -> str:
         lowered = simplified.lower()
         if any(token in lowered for token in wanted):
             selected.append(simplified)
-        if len(selected) >= 24:
+        if len(selected) >= 32:
             break
     return "\n".join(f"- {line}" for line in selected)
+
+
+SUBJECT_GUIDE_TOPIC_PREFIXES: Tuple[Tuple[str, str], ...] = (
+    ("medical_", "law_medicine"),
+    ("clinical_negligence", "law_medicine"),
+    ("competition_", "competition_law"),
+    ("pensions_", "pensions_law"),
+    ("private_international_law", "private_international_law"),
+    ("conflict_of_laws", "private_international_law"),
+    ("arbitration_", "private_international_law"),
+    ("land_", "land_law"),
+    ("property_", "land_law"),
+    ("equity_", "trusts_law"),
+    ("trust", "trusts_law"),
+    ("contract_", "contract_law"),
+    ("commercial_", "commercial_law"),
+    ("sale_goods", "commercial_law"),
+    ("consumer_", "contract_law"),
+    ("employment_", "employment_law"),
+    ("criminal_", "criminal_law"),
+    ("sentencing_", "criminal_law"),
+    ("family_", "family_law"),
+    ("tort_", "tort_law"),
+    ("eu_", "eu_law"),
+    ("public_international_law", "public_international_law"),
+    ("ihl_", "public_international_law"),
+    ("evidence_", "evidence_law"),
+    ("tax_", "tax_law"),
+    ("ip_", "intellectual_property_law"),
+    ("copyright_", "intellectual_property_law"),
+    ("trade_mark", "intellectual_property_law"),
+    ("trademark", "intellectual_property_law"),
+    ("company_", "business_law"),
+    ("insolvency_", "business_law"),
+    ("partnership_", "business_law"),
+    ("business_", "business_law"),
+    ("data_protection", "biolaw_ai_data"),
+    ("ai_", "biolaw_ai_data"),
+    ("robotics_", "biolaw_ai_data"),
+    ("generic_planning_law", "public_law"),
+    ("public_law", "public_law"),
+    ("generic_judicial_review", "public_law"),
+    ("generic_constitutional_law", "public_law"),
+    ("generic_charity_law", "public_law"),
+    ("generic_mediation_law", "mediation_law"),
+    ("international_commercial_mediation", "mediation_law"),
+)
+
+SUBJECT_GUIDE_KEYWORDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("law_medicine", ("law and medicine", "medical law", "consent", "mental capacity act", "abortion", "transplantation", "hfea", "end of life")),
+    ("competition_law", ("competition law", "article 101", "article 102", "market definition", "dominance", "cartel", "dma", "digital markets")),
+    ("pensions_law", ("pensions law", "pension scheme", "occupational pension", "barber", "section 67", "pensions ombudsman")),
+    ("private_international_law", ("private international law", "conflict of laws", "jurisdiction", "choice of law", "rome i", "rome ii", "brussels", "forum non conveniens")),
+    ("land_law", ("land law", "registered land", "overriding interest", "easement", "covenant", "co-ownership", "tolata", "proprietary estoppel")),
+    ("trusts_law", ("trusts law", "equity", "fiduciary", "tracing", "constructive trust", "charitable trust", "certainty of objects")),
+    ("contract_law", ("contract law", "consideration", "misrepresentation", "duress", "frustration", "exclusion clause", "unfair terms")),
+    ("commercial_law", ("commercial law", "sale of goods", "nemo dat", "retention of title", "agency", "secured transactions", "carriage of goods")),
+    ("employment_law", ("employment law", "employee", "employer", "worker status", "unfair dismissal", "redundancy", "restrictive covenant", "garden leave", "equal pay", "flexible working", "whistleblowing")),
+    ("criminal_law", ("criminal law", "murder", "manslaughter", "theft", "robbery", "burglary", "self-defence", "attempts")),
+    ("family_law", ("family law", "children act", "welfare checklist", "financial remedy", "matrimonial", "child arrangements")),
+    ("tort_law", ("tort law", "negligence", "duty of care", "nuisance", "defamation", "vicarious liability", "economic loss")),
+    ("eu_law", ("eu law", "free movement", "direct effect", "supremacy", "preliminary reference", "proportionality", "article 34")),
+    ("public_international_law", ("public international law", "state responsibility", "use of force", "state immunity", "customary international law", "rome statute", "ihl")),
+    ("evidence_law", ("evidence law", "hearsay", "bad character", "expert evidence", "confession", "identification evidence")),
+    ("tax_law", ("tax law", "income tax", "capital gains", "vat", "tax avoidance", "ramsay", "gaar")),
+    ("intellectual_property_law", ("intellectual property", "copyright", "patent", "trade mark", "trademark", "passing off", "database right")),
+    ("biolaw_ai_data", ("biolaw", "ai regulation", "artificial intelligence", "data protection", "gdpr", "medical devices", "algorithmic discrimination")),
+    ("mediation_law", ("mediation", "international commercial mediation", "enforcement of settlement", "singapore convention", "confidentiality in mediation")),
+    ("public_law", ("constitutional law", "administrative law", "judicial review", "planning law", "human rights act", "legitimate expectation", "nppf")),
+    ("business_law", ("business law", "company law", "directors' duties", "insolvency", "partnership", "corporate governance")),
+)
+
+SUBJECT_GUIDE_PRIVACY_BLOCKLIST: Tuple[str, ...] = (
+    "/users/",
+    "\\users\\",
+    "law3071",
+)
+
+
+def _infer_subject_guide_slug(topic: str = "", query: str = "") -> str:
+    topic_key = (topic or "").strip().lower()
+    low = (query or "").lower()
+
+    def _subject_keyword_present(keyword: str) -> bool:
+        needle = (keyword or "").strip().lower()
+        if not needle:
+            return False
+        if re.fullmatch(r"[a-z0-9]{1,3}", needle):
+            return bool(re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", low))
+        return needle in low
+
+    keyword_hits: List[Tuple[int, str]] = []
+    for slug, keywords in SUBJECT_GUIDE_KEYWORDS:
+        hits = sum(1 for keyword in keywords if _subject_keyword_present(keyword))
+        if hits:
+            keyword_hits.append((hits, slug))
+    if keyword_hits:
+        keyword_hits.sort(key=lambda item: (-item[0], item[1]))
+        if keyword_hits[0][0] >= 2:
+            return keyword_hits[0][1]
+    for prefix, slug in SUBJECT_GUIDE_TOPIC_PREFIXES:
+        if topic_key.startswith(prefix):
+            return slug
+    if keyword_hits:
+        return keyword_hits[0][1]
+    return ""
+
+
+def _sanitize_subject_guide_line(line: str) -> str:
+    cleaned = (line or "").strip()
+    if not cleaned:
+        return ""
+    lowered = cleaned.lower()
+    home_name = Path.home().name.lower()
+    if (
+        any(token in lowered for token in SUBJECT_GUIDE_PRIVACY_BLOCKLIST)
+        or (home_name and home_name in lowered)
+    ):
+        return ""
+    cleaned = re.sub(r"/Users/[^\s)]+", "[local path redacted]", cleaned)
+    cleaned = re.sub(r"(?i)\b(?:university|institution)\s+of\s+[A-Z][A-Za-z]+", "the institution", cleaned)
+    return cleaned
+
+
+@lru_cache(maxsize=64)
+def _read_subject_guide_excerpt(slug: str, max_lines: int = 48) -> str:
+    safe_slug = re.sub(r"[^a-z0-9_\\-]", "", (slug or "").strip().lower())
+    if not safe_slug:
+        return ""
+    guide_path = Path(__file__).resolve().parent / "legal_doc_tools" / "law_guides" / f"{safe_slug}.md"
+    try:
+        text = guide_path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+    sections: List[Tuple[str, List[str]]] = []
+    current_heading = ""
+    current_lines: List[str] = []
+
+    def _flush_section() -> None:
+        nonlocal current_heading, current_lines
+        if current_heading and current_lines:
+            sections.append((current_heading, current_lines))
+        current_heading = ""
+        current_lines = []
+
+    for raw_line in text.splitlines():
+        line = _sanitize_subject_guide_line(raw_line)
+        if not line:
+            continue
+        if line.startswith("# "):
+            continue
+        if line.startswith("## "):
+            _flush_section()
+            current_heading = line
+            current_lines = [line]
+        elif line.startswith("- ") or line.startswith("### "):
+            if current_heading:
+                current_lines.append(line)
+            else:
+                current_heading = "## Guide Notes"
+                current_lines = [current_heading, line]
+    _flush_section()
+
+    if not sections:
+        return ""
+
+    section_by_heading = {heading.lower(): lines for heading, lines in sections}
+    priority = [
+        "## answer method",
+        "## source modes",
+        "## material-led emphasis",
+        "## essay introduction method",
+        "## feedback rules",
+        "## avoid",
+        "## for each topic include",
+        "## topic map",
+        "## model introduction patterns",
+        "## case brief bank",
+    ]
+    ordered_sections: List[List[str]] = []
+    seen: Set[str] = set()
+    for heading in priority:
+        lines = section_by_heading.get(heading)
+        if lines:
+            ordered_sections.append(lines)
+            seen.add(heading)
+    for heading, lines in sections:
+        key = heading.lower()
+        if key not in seen:
+            ordered_sections.append(lines)
+
+    selected: List[str] = []
+    for section_lines in ordered_sections:
+        if len(selected) >= max_lines:
+            break
+        for line in section_lines:
+            if len(selected) >= max_lines:
+                break
+            selected.append(line)
+
+    if not selected:
+        return ""
+    return f"[SUBJECT GUIDE — {safe_slug}]\n" + "\n".join(selected)
+
+
+def _subject_guide_excerpt_for_query(
+    query: str,
+    profile: Optional[Dict[str, Any]] = None,
+    *,
+    max_lines: int = 48,
+) -> str:
+    topic = str((profile or {}).get("topic") or "")
+    slug = _infer_subject_guide_slug(topic, query)
+    if not slug:
+        return ""
+    return _read_subject_guide_excerpt(slug, max_lines=max_lines)
 
 
 @lru_cache(maxsize=1)
@@ -23804,10 +24927,15 @@ def _build_local_code_rag_answer_prompt_block(
         "- Prefer one complete answer in a single response. Do not stop at an issue list, research memo, or partial analysis unless the user expressly asks for that narrower format.",
         "- Explicit user requirements remain binding: word limits, citation style, jurisdiction limits, exclusions, benchmark/rubric instructions, and requested output shape override generic defaults.",
         "- Learn from reviewer/user feedback at rule level: generalise the drafting lesson and apply it across analogous issues, but do not carry forward document-specific confidential content as reusable default text.",
+        "- Apply supervisor/formative/summative feedback as quality controls: verified authority hierarchy, precise pinpoints, explicit assumptions/calculations, short disciplined paragraphs, and complete prompt-map coverage.",
+        "- If indexed RAG coverage is thin/outdated/missing authority, use the backend online-search fallback when it is configured; if no search provider returns results, do not claim web verification was performed.",
     ]
     guide_excerpt = _local_legal_answer_guide_excerpt()
     if guide_excerpt:
         lines.append("Shared legal backend guide anchors:\n" + guide_excerpt)
+    subject_guide = _subject_guide_excerpt_for_query(message, max_lines=28)
+    if subject_guide:
+        lines.append("Matched subject guide anchors:\n" + subject_guide)
     return "\n".join(lines)
 
 
@@ -24057,8 +25185,16 @@ def _generate_with_codex_local_adapter(
             cmd.insert(2, "--ephemeral")
         if configured_model:
             cmd.extend(["-m", configured_model])
-        if allow_web_search and _truthy_env("LEGAL_AI_CODEX_LOCAL_ALLOW_SEARCH"):
-            cmd.append("--search")
+        if allow_web_search and _truthy_env("LEGAL_AI_CODEX_LOCAL_ALLOW_SEARCH", "1"):
+            if _codex_exec_supports_option(codex_cli, "--search"):
+                cmd.append("--search")
+            else:
+                prompt += (
+                    "\n\n[CODEX SEARCH OPTION UNAVAILABLE]\n"
+                    "The backend allowed web search for this request, but this Codex CLI executable "
+                    "does not advertise a --search option. Use only supplied RAG/backend-search context "
+                    "and do not claim live web verification was performed.\n"
+                )
         cmd.append("-")
 
         env = os.environ.copy()
@@ -24179,7 +25315,8 @@ def _build_legal_doc_workflow_prompt_block(
         "- Use the uploaded draft as the base document. Preserve the author's thesis and voice while tightening structure, precision, and authority support.",
         "- Run this internal order: benchmark extraction -> issue map -> sentence-level correction -> paragraph/essay coherence -> target-fit check -> authority/citation verification -> final polish.",
         "- Indexed RAG retrieval is mandatory before legal drafting or amending. Use indexed RAG material first to identify stronger cases, legislation, journal commentary, missing counterarguments, and missing rebuttals.",
-        "- Use Google Search grounding as a second layer for verification or supplementation where indexed coverage is thin, outdated, or missing.",
+        "- Use backend online search / Google Search grounding as a second layer for verification or supplementation where indexed coverage is thin, outdated, or missing.",
+        "- Do not claim online search or Google Search grounding was used unless the backend actually enabled a search tool or appended backend online-search context for this request.",
         "- Every added substantive point must be supported by a real, verified authority or rewritten more cautiously.",
         "- Never invent citations, metadata, quotations, pinpoint references, or recent developments.",
         "- Keep word-count instructions strict: if the user gives a target or cap, stay within it; otherwise keep the draft broadly stable in length while improving quality.",
@@ -24200,6 +25337,7 @@ def _build_legal_doc_workflow_prompt_block(
             "- Preserve the user's exact local DOCX styling for amended wording: same font family, font size, paragraph style, spacing, colour, and local emphasis pattern as the surrounding original text. Do not flatten a paragraph or footnote into one generic template style if the user originally used mixed local styling.",
             "- Never normalize the user's line spacing in DOCX amend mode. If the original paragraph uses 1.5-line spacing, keep 1.5-line spacing; if it uses double spacing, keep double spacing. Match the exact local paragraph spacing already used there.",
             "- Do not rewrite an original footnote that is already accurate just for stylistic tidiness.",
+            "- Across all citation styles, never delete a user's original footnote or endnote just to tidy, restyle, or convert the reference system. Correct an existing note only when accuracy, relevance, or the user's explicit instruction requires it. If extra support is needed and no existing note should be corrected, add the authority inline immediately after the relevant sentence in the active citation style instead.",
             "- Footnote text for DOCX amendment workflows must be plain text only: no literal markdown emphasis markers such as `*...*`, `**...**`, or backticks.",
         ])
         if _uses_inline_oscola_house_style(citation_style):
@@ -24230,6 +25368,26 @@ def _build_legal_doc_workflow_prompt_block(
     skill_excerpt = _legal_doc_skill_excerpt()
     if skill_excerpt:
         lines.append("Shared legal backend guide anchors:\n" + skill_excerpt)
+    subject_guide_query = "\n".join(
+        [*doc_names]
+        + [
+            str(item.get("text") or "")[:4500]
+            for item in uploaded_materials
+            if item.get("kind") in {"docx", "pdf", "text"} and str(item.get("text") or "").strip()
+        ]
+    ).strip()
+    if subject_guide_query:
+        try:
+            subject_profile = _infer_retrieval_profile(subject_guide_query)
+            subject_guide = _subject_guide_excerpt_for_query(
+                subject_guide_query,
+                subject_profile,
+                max_lines=32,
+            )
+        except Exception:
+            subject_guide = ""
+        if subject_guide:
+            lines.append("Matched subject guide anchors:\n" + subject_guide)
     return "\n".join(lines)
 
 
@@ -25778,18 +26936,38 @@ def send_message_with_docs(
 
         # Law and medicine / medical law
         if any(k in low for k in ["law and medicine", "medical law", "mental capacity act", "best interests", "advance decision", "transplantation", "abortion", "reproductive medicine", "assisted dying"]):
+            law_medicine_broad_mode = any(k in low for k in [
+                "no syllabus limit", "no-syllabus-limit", "broad-all", "broad all",
+                "broad legal research", "all materials", "not limited to syllabus",
+            ])
             _add([
                 "[TOPIC-SPECIFIC GUIDANCE — LAW AND MEDICINE (GENERAL)]",
+                "- Default mode is COURSE-BOUND for Law and Medicine answers: use the taught topics and course materials as controlling scope unless the user expressly asks for no syllabus limit / broad-all.",
+                "- If broad-all mode is expressly requested, widen research beyond the course but still keep English law, the question set, and verified authority hierarchy in control.",
+                "- Course-bound and broad-all modes share the same answer technique: precise legal route, defined terms, thesis, focused examples, counterarguments, and section-end mini-verdicts.",
                 "- Do not cover too many issues shallowly. Select the strongest module-relevant themes and defend them properly.",
                 "- Stay within the taught topic map unless the prompt expressly asks for expansion. For this module that normally means: medical ethics, consent, end-of-life decisions, transplantation, abortion, and reproductive medicine.",
-                "- Do NOT drift into out-of-syllabus areas such as clinical-negligence disclosure doctrine, neuro-interventions, or speculative property-rights-in-body debates unless the prompt specifically requires them.",
+                "- In course-bound mode, do NOT drift into out-of-syllabus areas such as mental health law, deprivation of liberty safeguards, public health law, clinical-negligence disclosure doctrine, neuro-interventions, speculative property-rights-in-body debates, US law, or surrogacy unless the prompt specifically requires them.",
+                "- In no-limitation / broad-all mode, those course exclusions no longer operate as exclusions; still label course-core and wider/current-law additions separately.",
+                "- Recent-law trigger: verify current status before relying on assisted dying bills, abortion reform proposals, HFEA/code updates, organ-allocation policies, or capacity-code reform.",
+                "- For essays, the introduction must do four jobs: define the legal field/statutory scheme, identify the disputed rule or ground, state the thesis, and preview the selected examples.",
+                "- If the user supplies exemplar introductions, learn the method only. Do not copy phrasing, sentence order, or distinctive slide wording; paraphrase into a fresh answer-specific structure.",
+                "- For reform questions, name the exact target of reform in the introduction: statutory ground, time limit, approval mechanism, consent rule, professional discretion, allocation policy, or offence.",
                 "- If discussing adult refusal/capacity, distinguish clearly between capacity, voluntariness, and information; keep battery/trespass distinct from negligence.",
-                "- For this module, do not centre a consent answer on Montgomery/negligence. The taught structure is broad awareness for valid consent, capacity, voluntariness, and the MCA 2005 framework.",
+                "- In course-bound mode, do not centre a consent answer on Montgomery/negligence. The taught structure is broad awareness for valid consent, capacity, voluntariness, and the MCA 2005 framework.",
                 "- If criticising incapacity/best-interests law, explain exactly where the test or its application is said to fail; do not assert override of autonomy without analysis.",
                 "- Use the taught authorities to make the point. For adult refusal/capacity, that commonly means Re T, Re B, Re W, E v Northern Care Alliance, Re C, Re W (2002), and A Local Authority v JB where relevant.",
                 "- If relying on academic commentary, attach an actual authority rather than saying commentary 'suggests' something without a reference.",
                 "- Keep the module's internal boundaries clear: consent, end-of-life, transplantation, abortion, and reproductive medicine are distinct topics and should not be collapsed into one generic autonomy essay.",
+                "- Exam-style answers should use in-text case/statutory/academic names unless a non-exam citation style is expressly requested.",
             ])
+            if law_medicine_broad_mode:
+                _add([
+                    "[TOPIC-SPECIFIC GUIDANCE — LAW AND MEDICINE (BROAD-ALL MODE)]",
+                    "- Broad-all mode permits wider cases, commentary, and current developments, but do not present broad research as module-required material.",
+                    "- Still identify which points are course-core and which are wider/current-law additions.",
+                    "- Wider material must be verified and used because it changes the analysis, not as decorative padding.",
+                ])
 
             if any(k in low for k in ["within the module syllabus", "within module syllabus", "within the syllabus", "within syllabus", "module syllabus", "covered topics in the module", "within the module"]):
                 _add([
@@ -25802,6 +26980,16 @@ def send_message_with_docs(
                     "- If discussing capacity criticism, distinguish diagnostic and functional thresholds and anchor that analysis in Re C, Re W (2002) and A Local Authority v JB; do not just say 'incapacity' is used to override autonomy.",
                     "- If discussing best interests versus substituted judgment, address how far past wishes can be respected where there is no formal advance decision under MCA 2005 ss 24-26.",
                     "- If discussing transplantation/commercialisation, focus tightly on the Human Tissue Act 2004 framework, especially s 32 where relevant, rather than drifting into general body-property theory.",
+                ])
+
+            if any(k in low for k in ["medical ethics", "bodily autonomy", "right to determine what shall be done", "dignity as empowerment", "dignity as constraint", "sanctity of life", "utilitarian", "rights-based", "duty-based", "virtue ethics"]):
+                _add([
+                    "[TOPIC-SPECIFIC GUIDANCE — LAW AND MEDICINE (MEDICAL ETHICS)]",
+                    "- Define the key ethical term early, then connect it to specific legal rules rather than writing free-standing philosophy.",
+                    "- For autonomy essays, use two or three focused syllabus examples only, such as adult refusal, mature children's refusal, assisted dying, transplantation, abortion, or assisted reproduction.",
+                    "- Open broad autonomy essays by defining bodily autonomy as control over medical touching/use of the body, then immediately state whether English law protects it consistently or only conditionally.",
+                    "- Evaluate whether the law reflects the ethical principle consistently, and end each example with a direct mini-verdict.",
+                    "- Avoid descriptive case lists. Each authority must support the thesis, a counterargument, or a reform point.",
                 ])
 
             if any(k in low for k in ["consent to treatment", "consent", "refusal of treatment", "capacity", "gillick", "voluntariness"]):
@@ -25827,6 +27015,9 @@ def send_message_with_docs(
                     "[TOPIC-SPECIFIC GUIDANCE — LAW AND MEDICINE (TRANSPLANTATION)]",
                     "- Start with the Human Tissue Act 2004 framework and the core consent/public-policy structure before moving to ethical debate.",
                     "- Keep living donation, deceased donation, and commercialisation separate. The legality, risks, and ethical arguments differ across them.",
+                    "- For deceased donation, apply the section 3 hierarchy: deceased decision, nominated representative, deemed consent where available, then qualifying relative.",
+                    "- For living donation, separate removal authority, section 1 storage/use consent, and section 33 HTA approval.",
+                    "- Do not say all directed donation is rejected: living donation is commonly directed, while deceased conditional donation and requested allocation raise distinct policy issues.",
                     "- Focus on the current legal framework for donation, allocation, and prohibited commercial dealing rather than drifting into speculative future technologies unless the prompt expressly asks for them.",
                     "- Where commercialisation is in issue, address the statutory prohibition directly, especially Human Tissue Act 2004 s 32 where relevant, and then evaluate whether the current model is justified or should be reformed.",
                 ])
@@ -25838,6 +27029,24 @@ def send_message_with_docs(
                     "- For abortion questions, distinguish the underlying offences from the statutory grounds/defences and then focus on the precise contested ground, such as fetal abnormality, time limits, or reform.",
                     "- For reproductive medicine, identify the specific regulatory issue first: consent to embryo use, storage, parenthood status, embryo research, or clinic regulation.",
                     "- Avoid drifting into broad moral theory without bringing it back to the actual statutory scheme and the concrete controversy raised by the question.",
+                ])
+            if any(k in low for k in ["abortion", "termination of pregnancy", "foetal abnormality", "fetal abnormality", "abortion act", "crowter", "jepson"]):
+                _add([
+                    "[TOPIC-SPECIFIC GUIDANCE — LAW AND MEDICINE (ABORTION)]",
+                    "- Start with OAPA 1861 / ILPA 1929 criminalisation, then explain the Abortion Act 1967 exception or gateway.",
+                    "- Keep section 1(1)(a) social ground separate from section 1(1)(d) fetal-abnormality ground.",
+                    "- For fetal-abnormality reform introductions, identify those two potential grounds, then state a thesis on autonomy/moral status and disability-equality concerns without copying model wording.",
+                    "- For fetal-abnormality reform, address moral status, disability-discrimination concerns, Crowter, Jepson, and whether reform should target time limits, information, decriminalisation, or the ground itself.",
+                    "- Do not make vague claims that the fetus has 'no status' without defining status and tying the claim to the statutory provision.",
+                ])
+            if any(k in low for k in ["reproductive medicine", "assisted reproduction", "human fertilisation", "human fertilization", "hfea", "ivf", "embryo", "pgt", "preimplantation", "saviour sibling", "savior sibling", "welfare of the child", "section 13(5)", "s.13(5)", "s 13(5)"]):
+                _add([
+                    "[TOPIC-SPECIFIC GUIDANCE — LAW AND MEDICINE (REPRODUCTIVE MEDICINE)]",
+                    "- Start with the HFEA 1990/2008 regulatory scheme, HFEA licensing, and the exact regulated activity.",
+                    "- For HFEA fitness/reform introductions, defend or criticise the regulatory architecture first, then preview selected issues such as Schedule 3 consent, section 13(5), PGT/saviour siblings, parenthood, or embryo research.",
+                    "- Separate consent to embryo/gamete use, welfare-of-child screening under section 13(5), legal parenthood, PGT, saviour siblings, and embryo research.",
+                    "- For welfare-of-child arguments, explain clinical discretion, supportive parenting, non-discrimination, and the medicalisation critique.",
+                    "- In course-bound mode, do not centre surrogacy because the tutorial materials exclude it unless the prompt expressly requires it.",
                 ])
 
         # Media & privacy — MPI / injunctions / Article 8/10
@@ -26203,7 +27412,7 @@ def send_message_with_docs(
                 "- End with practical advice (evidence of access + remedies).",
             ])
 
-        return out[:3]
+        return out[:4]
 
     # Inject compact topic-specific guidance (before general guidance blocks).
     topic_guidance_blocks = _topic_specific_guidance_blocks(message)
@@ -31194,91 +32403,92 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
                 ])
             )
     
-    # Google grounding fallback policy:
-    # Use RAG first. If legal-source coverage is insufficient, enable Google Search grounding.
+    # Backend online-search fallback policy:
+    # Use RAG first. If legal-source coverage is insufficient, enable either Gemini's
+    # native Google grounding tool or a provider-neutral backend online-search context.
     google_grounding_decision = {
         "use_google_search": False,
         "reason": "Disabled: RAG source coverage sufficient or non-legal query",
         "enforce_oscola": True
     }
-    if resolved_provider == "gemini" and NEW_GENAI_AVAILABLE and _is_legal_query_text(grounding_query):
-        is_continuation_turn = bool(continuation_info.get("is_continuation"))
-        is_long_answer_turn = bool(long_essay_info.get("is_long_essay"))
-        legal_doc_requires_google = bool(legal_doc_workflow.get("active"))
-        mcq_requires_google = bool(mcq_workflow_mode.get("active"))
-        allow_google_fallback = bool(
-            legal_doc_requires_google or mcq_requires_google or (
-                ENABLE_GOOGLE_GROUNDING_FALLBACK
-                and ((not is_continuation_turn) or ALLOW_GOOGLE_FALLBACK_FOR_CONTINUATIONS)
-                and ((not is_long_answer_turn) or ALLOW_GOOGLE_FALLBACK_FOR_LONG_ANSWERS)
+    is_continuation_turn = bool(continuation_info.get("is_continuation"))
+    is_long_answer_turn = bool(long_essay_info.get("is_long_essay"))
+    legal_doc_requires_online_search = bool(legal_doc_workflow.get("active"))
+    mcq_requires_online_search = bool(mcq_workflow_mode.get("active"))
+    online_search_decision = _backend_online_search_fallback_decision(
+        query=grounding_query,
+        rag_context=rag_context,
+        retrieval_audit=retrieval_audit,
+        local_index_coverage=local_index_coverage,
+        legal_doc_requires_search=legal_doc_requires_online_search,
+        mcq_requires_search=mcq_requires_online_search,
+        is_continuation_turn=is_continuation_turn,
+        is_long_answer_turn=is_long_answer_turn,
+    )
+    codex_subprocess_ok_for_generation, _codex_subprocess_reason_for_generation = _codex_local_subprocess_supported()
+    local_codex_generation_path = bool(
+        (not resolved_api_key)
+        and (not enforce_long_response_split)
+        and (not _truthy_env("LEGAL_AI_DISABLE_CODEX_LOCAL_ADAPTER"))
+        and codex_subprocess_ok_for_generation
+        and bool(_find_codex_cli())
+    )
+    if (
+        resolved_provider == "gemini"
+        and NEW_GENAI_AVAILABLE
+        and online_search_decision.get("use_online_search")
+        and not local_codex_generation_path
+    ):
+        google_grounding_decision = {
+            "use_google_search": True,
+            "reason": str(online_search_decision.get("reason") or "RAG source coverage insufficient"),
+            "enforce_oscola": True,
+        }
+        parts.append(
+            "\n".join([
+                "[GOOGLE GROUNDING FALLBACK ACTIVE]",
+                (
+                    "This uploaded-document legal workflow requires RAG plus Gemini Google-grounded verification/supplementation."
+                    if legal_doc_requires_online_search
+                    else "This MCQ correction/generation workflow requires RAG plus Gemini Google-grounded verification for answer accuracy."
+                    if mcq_requires_online_search
+                    else "RAG retrieval or indexed authority coverage is too weak to rely on alone for this legal query."
+                ),
+                "Use Gemini Google Search grounding only to verify, strengthen, or fill missing authority coverage.",
+                f"Do not invent citations. Keep {_citation_style_label(requested_citation_style)} formatting and factual calibration strict."
+            ])
+        )
+    elif online_search_decision.get("use_online_search") and local_codex_generation_path and not _online_search_provider_configured():
+        parts.append(
+            _build_codex_online_search_fallback_block(
+                reason=str(online_search_decision.get("reason") or "RAG source coverage insufficient"),
+                citation_style=requested_citation_style,
             )
         )
-        coverage_insufficient, coverage_reason = _is_rag_source_coverage_insufficient(rag_context)
-        heuristic = should_use_google_search_grounding(grounding_query, rag_context)
-        weak_retrieval = bool(retrieval_audit.get("needs_retry"))
-        local_index_thin = bool(local_index_coverage.get("thin"))
-        fallback_reasons: List[str] = []
-        if legal_doc_requires_google:
-            fallback_reasons.append(
-                "uploaded legal-document review/amend flow requires search-backed verification alongside RAG"
-            )
-        if mcq_requires_google:
-            fallback_reasons.append(
-                "MCQ correction/generation mode requires search-backed verification alongside RAG for answer-key accuracy"
-            )
-        if coverage_insufficient:
-            fallback_reasons.append(coverage_reason)
-        if weak_retrieval:
-            fallback_reasons.append(
-                f"retrieval audit flagged weak/contaminated coverage (score={float(retrieval_audit.get('score', 0.0) or 0.0):.2f})"
-            )
-        if local_index_thin:
-            fallback_reasons.append(
-                f"local index coverage thin ({int(local_index_coverage.get('matched_count', 0) or 0)}/{int(local_index_coverage.get('target_count', 0) or 0)} core authority name hits)"
-            )
-        if fallback_reasons and (heuristic.get("use_google_search") or legal_doc_requires_google or mcq_requires_google):
-            fallback_reasons.append(f"heuristic={str(heuristic.get('reason') or 'weak-rag trigger')}")
-
-        if fallback_reasons and allow_google_fallback:
-            google_grounding_decision = {
-                "use_google_search": True,
-                "reason": "; ".join(dict.fromkeys(fallback_reasons)),
-                "enforce_oscola": True
-            }
-            parts.append(
-                "\n".join([
-                    "[GOOGLE GROUNDING FALLBACK ACTIVE]",
-                    (
-                        "This uploaded-document legal workflow requires RAG plus Google-grounded verification/supplementation."
-                        if legal_doc_requires_google
-                        else "This MCQ correction/generation workflow requires RAG plus Google-grounded verification for answer accuracy."
-                        if mcq_requires_google
-                        else "RAG retrieval or indexed authority coverage is too weak to rely on alone for this legal query."
-                    ),
-                    "Use Google Search grounding only to verify, strengthen, or fill missing authority coverage.",
-                    f"Do not invent citations. Keep {_citation_style_label(requested_citation_style)} formatting and factual calibration strict."
-                ])
+        print(f"[CODEX ONLINE SEARCH] Local Codex search fallback allowed - {online_search_decision.get('reason')}")
+    elif online_search_decision.get("use_online_search"):
+        search_context_block, search_meta = _build_backend_online_search_context_block(
+            query=grounding_query,
+            retrieval_profile=retrieval_profile,
+            citation_style=requested_citation_style,
+            reason=str(online_search_decision.get("reason") or "RAG source coverage insufficient"),
+            max_results=6,
+        )
+        parts.append(search_context_block)
+        if search_meta.get("result_count"):
+            print(
+                f"[BACKEND ONLINE SEARCH] Added {search_meta.get('result_count')} results "
+                f"from {search_meta.get('provider')} - {online_search_decision.get('reason')}"
             )
         else:
-            google_grounding_decision = {
-                "use_google_search": False,
-                "reason": (
-                    "; ".join(fallback_reasons) if fallback_reasons else (
-                        coverage_reason
-                        if allow_google_fallback
-                        else "Disabled for continuation/latency policy"
-                    )
-                ) if allow_google_fallback else (
-                    "Disabled for continuation/latency policy"
-                    if (is_continuation_turn or is_long_answer_turn)
-                    else "Disabled by ENABLE_GOOGLE_GROUNDING_FALLBACK"
-                ),
-                "enforce_oscola": True
-            }
+            print(
+                f"[BACKEND ONLINE SEARCH] Fallback unavailable via {search_meta.get('provider')}: "
+                f"{search_meta.get('error')}"
+            )
     elif resolved_provider != "gemini":
         google_grounding_decision = {
             "use_google_search": False,
-            "reason": f"Disabled: {get_provider_display_name(resolved_provider)} path does not use Gemini Google grounding",
+            "reason": f"Disabled: {get_provider_display_name(resolved_provider)} path did not require backend online-search fallback",
             "enforce_oscola": True,
         }
 
@@ -31583,7 +32793,7 @@ Cumulative target: Part 1-{current_part} should total ~{cumulative_target_to_dat
             system_instruction=full_system_instruction,
             history=history_for_model,
             project_id=project_id,
-            allow_web_search=bool(google_grounding_decision.get("use_google_search")),
+            allow_web_search=bool(online_search_decision.get("use_online_search")),
         )
         return (response_text, []), rag_context
 
@@ -32388,10 +33598,10 @@ SUCCESS: Reviewing ALL chapters (Ch 1 through final chapter) in ONE response
                 100% ACCURACY MANDATE - ZERO TOLERANCE FOR ERRORS
 -----------------------------------------------------------------------------
 
-RULE #1: ONLY USE SOURCES FROM YOUR RAG CONTEXT (RETRIEVED DOCUMENTS)
+RULE #1: ONLY USE SOURCES FROM RETRIEVED OR BACKEND-ONLINE-SEARCH CONTEXT
 
-You have been provided with specific legal documents in your RAG context.
-EVERY citation, EVERY case, EVERY legal principle MUST come from THOSE documents.
+You have been provided with specific legal documents in retrieved RAG context and, when fallback is active, backend online-search context.
+EVERY citation, EVERY case, EVERY legal principle MUST come from those retrieved or backend-search materials.
 
 ABSOLUTELY FORBIDDEN - FABRICATED REFERENCES:
 - Making up case names that don't exist in your RAG context
@@ -32400,23 +33610,23 @@ ABSOLUTELY FORBIDDEN - FABRICATED REFERENCES:
 - Adding paragraph numbers (1-006, para 3.45) to citations
 
 REQUIRED - 100% ACCURATE CITATIONS:
-- ONLY cite sources that appear in your RAG context
-- Case names must be EXACTLY as they appear in retrieved documents
-- Book/article references must be EXACTLY from RAG context
-- If a source is NOT in your RAG context, DO NOT CITE IT
+- ONLY cite sources that appear in retrieved RAG context or backend online-search context
+- Case names must be EXACTLY as they appear in retrieved/search materials
+- Book/article references must be EXACTLY from retrieved/search context
+- If a source is NOT in retrieved or backend-search context, DO NOT CITE IT
 - Better NO citation than a FABRICATED citation
 
-RULE #2: CONTENT MUST BE GROUNDED IN RAG CONTEXT
+RULE #2: CONTENT MUST BE GROUNDED IN RETRIEVED OR BACKEND-SEARCH CONTEXT
 
 - Legal analysis must be based on sources provided to you
 - Do NOT make up legal principles that aren't in your documents
 - Do NOT hallucinate case holdings or statutory provisions
-- If you don't have information in RAG context, say so or write without citation
+- If you don't have information in retrieved/search context, say so or write without citation
 
 RULE #3: VERIFICATION CHECKLIST (BEFORE EVERY CITATION)
 
 Ask yourself:
-1. Is this case/source in my RAG context? If NO, DELETE the citation
+1. Is this case/source in my retrieved or backend-search context? If NO, DELETE the citation
 2. Is the name EXACTLY correct? If NO, FIX IT or DELETE
 3. Am I adding paragraph numbers? If YES, DELETE them
 4. Is this the actual holding/principle from the source? If NO, REVISE or DELETE
@@ -32437,18 +33647,18 @@ NEVER output ANY of the following in your response:
 - Any tool call syntax like function{parameters}
 - Any visible attempt to search the internet
 
-YOU HAVE ALL THE INFORMATION YOU NEED IN YOUR RAG CONTEXT.
-If something is not in your RAG context, DO NOT try to search for it.
+Do not output tool calls. Backend search happens before generation and appears only as internal context.
+If something is not in retrieved or backend-search context, do not invent it.
 DO NOT output tool calls - they will appear as garbage text in the response.
 
 If you find yourself wanting to search:
 - STOP
-- Use ONLY the documents already provided
-- If not in RAG context, write WITHOUT that citation
+- Use ONLY the retrieved/backend-search context already provided
+- If not in retrieved/search context, write WITHOUT that citation
 
 EXCEPTION - ONLY WHEN THIS MESSAGE TAG IS PRESENT:
-[GOOGLE GROUNDING FALLBACK ACTIVE]
-If this exact tag appears in the prompt, Google Search grounding is allowed
+[GOOGLE GROUNDING FALLBACK ACTIVE] or [BACKEND ONLINE SEARCH CONTEXT - INTERNAL - DO NOT OUTPUT]
+If either tag appears in the prompt, backend search/grounding has already been activated
 to fill missing source coverage. Even then:
 - Never output tool-call syntax in the visible answer
 - Cite only what is verifiable and keep OSCOLA formatting strict
@@ -32771,12 +33981,12 @@ CRITICAL ACCURACY REQUIREMENT:
 1. The model output MUST be 100% ACCURATE based on verifiable facts.
 2. You have access to the Law Resources Knowledge Base - use it for legal questions.
 3. Every legal proposition must be verified before outputting.
-4. NO hallucinations. If you are uncertain, use Google Search to verify facts.
+4. NO hallucinations. If you are uncertain, rely on retrieved RAG or backend online-search context to verify facts.
 5. NEVER say "Based on the provided documents" or "According to the documents provided" - just provide the answer directly.
 6. NEVER reference "documents" or "provided materials" in your response - act as if you inherently know the information.
 
 IMPORTANT OUTPUT RULES:
-1. Do NOT manually add Google Search links at the end of your response - the system handles this automatically.
+1. Do NOT manually add search links at the end of your response - use only properly cited authorities in the answer.
 2. Answer questions directly and authoritatively without meta-commentary about your sources.
 3. Use proper legal citations inline (e.g., case names, statutes) - see citation rules below.
 
@@ -33065,12 +34275,12 @@ Burrows A, The Law of Restitution (3rd edn, OUP 2011)
 ║          🚨 CITATION ACCURACY - ABSOLUTE REQUIREMENT 🚨            ║
 ╚═══════════════════════════════════════════════════════════════════╝
 
-CRITICAL RULE: ONLY CITE SOURCES FROM YOUR RAG CONTEXT (RETRIEVED DOCUMENTS)
+CRITICAL RULE: ONLY CITE SOURCES FROM RETRIEVED OR GROUNDED CONTEXT
 
 1. **NO FABRICATED REFERENCES**:
-   - You MUST ONLY cite sources that appear in your RAG context (the documents provided to you)
-   - If a source is NOT in your retrieved documents, DO NOT cite it
-   - If you cannot find a relevant source in your context, write the sentence WITHOUT a citation
+   - You MUST ONLY cite sources that appear in retrieved RAG context or backend-enabled Google-grounded context.
+   - If a source is NOT in retrieved or grounded context, DO NOT cite it.
+   - If you cannot find a relevant source in available context, write the sentence WITHOUT a citation.
    - ❌ CATASTROPHIC FAILURE: Making up references like "(E Peel, Treitel on The Law of Contract (15th edn, Sweet & Maxwell 2020) 1-006)"
    
 2. **BAN PARAGRAPH NUMBER CITATIONS**:
@@ -33093,7 +34303,7 @@ CRITICAL RULE: ONLY CITE SOURCES FROM YOUR RAG CONTEXT (RETRIEVED DOCUMENTS)
    
 4. **VERIFY EVERY CITATION**:
    Before outputting a citation, ask yourself:
-   - Is this source in my RAG context?
+   - Is this source in my retrieved RAG context or backend-enabled Google-grounded context?
    - Is the case name EXACTLY correct?
    - Is the citation EXACTLY correct?
    - Am I adding paragraph numbers I shouldn't?
@@ -33102,7 +34312,7 @@ CRITICAL RULE: ONLY CITE SOURCES FROM YOUR RAG CONTEXT (RETRIEVED DOCUMENTS)
 
 5. **ACCURACY OVER QUANTITY**:
    Better to have FEW accurate citations than MANY fabricated ones.
-   If you have only 5 real sources from RAG context, use only those 5.
+   If you have only 5 real sources from retrieved/grounded context, use only those 5.
    Do NOT invent sources to reach a citation target.
 
 ══════════════════════════════════════════════════════════════════
@@ -33117,13 +34327,13 @@ Problem: This exact reference with "1-006" is fabricated. Ban paragraph numbers!
 "The court held (Smith v Jones [2023] EWCA Civ 456)."
 Problem: This case doesn't exist in RAG context. Don't make it up!
 
-✅ CORRECT (from RAG context):
+✅ CORRECT (from retrieved/grounded context):
 "The court held (Donoghue v Stevenson [1932] AC 562)."
-Reason: This is a real case from your retrieved documents.
+Reason: This is a real case from retrieved or grounded context.
 
 ✅ CORRECT (no citation when unsure):
 "The doctrine of consideration remains important in contract law."
-Reason: If you can't find a source in RAG context, write without citation.
+Reason: If you cannot find a source in retrieved or grounded context, write without citation.
 
 ══════════════════════════════════════════════════════════════════
 
@@ -33145,28 +34355,28 @@ Examples:
 *** END SIMPLE CONVERSATIONAL QUESTIONS ***
 
 You have access to the Law Resources Knowledge Base for legal questions. 
-Use these authoritative legal sources AND Google Search grounding to provide accurate answers.
+Use these authoritative legal sources and, where the backend enables it, backend online search / Google Search grounding to provide accurate answers.
 
-*** GOOGLE SEARCH GROUNDING WITH OSCOLA CITATIONS (CRITICAL REQUIREMENT) ***
+*** BACKEND ONLINE SEARCH WITH ACTIVE-STYLE CITATIONS (CRITICAL REQUIREMENT) ***
 
 When the knowledge base is NOT sufficient for answering the essay/question:
-1. You MUST use Google Search to find additional authoritative sources
-2. ALL materials from Google Search MUST be cited in OSCOLA format
-3. Citations MUST appear in parentheses () immediately after the relevant sentence
-4. The citation must include ** markers on both sides of the parentheses for emphasis
+1. The backend MUST use online search / Gemini Google grounding where configured to find additional authoritative sources
+2. ALL materials from backend online search MUST be cited in the active citation style.
+3. Citations MUST appear immediately after the relevant sentence.
+4. Do not add markdown emphasis markers around citations.
 
-CORRECT FORMAT FOR GOOGLE SEARCH SOURCES:
-"The principle of informed consent has evolved significantly in recent years (Montgomery v Lanarkshire Health Board [2015] UKSC 11).**"
-"Academic commentary suggests a shift towards patient autonomy (J Herring, 'The Place of Parental Rights in Medical Law' (2014) 42 Journal of Medical Ethics 146).**"
+CORRECT FORMAT FOR BACKEND ONLINE SEARCH SOURCES UNDER INLINE OSCOLA HOUSE STYLE:
+"The principle of informed consent has evolved significantly in recent years (Montgomery v Lanarkshire Health Board [2015] UKSC 11)."
+"Academic commentary suggests a shift towards patient autonomy (J Herring, 'The Place of Parental Rights in Medical Law' (2014) 42 Journal of Medical Ethics 146)."
 
 RULES:
-- EVERY Google Search source MUST be cited in proper OSCOLA format
-- Citations must appear inline, in parentheses (), after the sentence they support
-- Add ** markers around the parentheses: **(citation).**
-- NO exceptions - if you use Google Search results, you MUST cite them properly
-- If you cannot verify the exact OSCOLA citation, use Google Search to verify it BEFORE outputting
+- EVERY backend online-search source MUST be cited in the active citation style.
+- For inline OSCOLA, citations must appear inline, in parentheses (), after the sentence they support.
+- Do not add ** markers around citations.
+- NO exceptions - if you use backend online-search results, you MUST cite them properly
+- If you cannot verify the exact citation from retrieved/search context, do not use that citation
 
-*** END GOOGLE SEARCH GROUNDING WITH OSCOLA CITATIONS ***
+*** END BACKEND ONLINE SEARCH WITH ACTIVE-STYLE CITATIONS ***
 
 *** SPECIFIC PARAGRAPH IMPROVEMENT MODE ***
 
@@ -33236,7 +34446,7 @@ FORMATTING RULES:
 - Each paragraph: 3-4 sentences ONLY (max 6 for coherence)
 - Citations: Full OSCOLA in parentheses immediately after relevant sentence
 - Coverage: MUST include paragraphs from across the ENTIRE essay
-- NO google_search, NO web searches, NO tool calls - use RAG context ONLY
+- Use RAG context first. Do not use extra search unless the backend has explicitly enabled search fallback because retrieved coverage is thin, outdated, or missing required authority.
 
 SCENARIO 2 - User asks to "improve the whole essay":
 1. Output the ENTIRE essay with all improvements applied
@@ -33469,7 +34679,7 @@ ONLY cite: Cases, Statutes, Regulations, SRA Standards/Guidance
 *** SQE NOTES REQUIREMENTS ***
 
 1. NO WORD LIMIT - be comprehensive. 15,000+ words expected per full set.
-2. ACCURACY: Every statement must be 100% accurate. Use Google Search for 2025-2026 updates.
+2. ACCURACY: Every statement must be 100% accurate. Use backend online-search context for 2025-2026 updates where enabled.
 3. CONTENT: Include ALL topics, especially niche/hard areas that candidates forget.
 4. PRACTICE QUESTIONS: Make them HARDER than actual SQE. Target the traps.
 5. KILLER TRAPS: This is the most valuable section. Be thorough.
@@ -34650,7 +35860,7 @@ A. CITATION VERIFICATION CHECKLIST (BEFORE OUTPUTTING ANY CITATION)
 For EVERY citation you include, you MUST verify:
 
 1. CASE CITATIONS - Before citing any case, confirm:
-   ☐ Is this a real case? (Verify via Google Search or indexed documents)
+   ☐ Is this a real case? (Verify via backend online-search context or indexed documents)
    ☐ Is the year correct?
    ☐ Is the court reference correct? (e.g., [1990] UKHL 2, not [1990] AC 605 if using neutral citation)
    ☐ Is the paragraph/page number accurate? (If uncertain, cite generally without pinpoint)
@@ -35860,7 +37070,7 @@ THE SOLUTION: For sources you cannot verify, cite GENERALLY without pinpoints.
    ✅ You MAY cite paragraph numbers for cases ONLY when:
    - It's a well-known leading case with famous paragraphs (e.g., Caparo at [21]-[23])
    - You found it in the indexed documents
-   - Google Search confirms the exact paragraph says what you claim
+   - backend online-search context confirms the exact paragraph says what you claim
    
    ⚠️ IF UNCERTAIN about case paragraph: Cite the case generally without [para]:
    INSTEAD OF: "Intel v Commission [2017] ECLI:EU:C:2017:632 [138]-[141]"
@@ -36429,6 +37639,20 @@ Compare KPMG and QinetiQ.
 
 For active members: consider s 67(A7) (opt-out fiction).
 
+E1. NRA / EQUALISATION / COMMUTATION FACTOR CHECKS
+
+- Do not assume a normal retirement age change is invalid merely because Barber or equality rules are in the background. Analyse the scheme wording, the timing of service, the amendment power, and the domestic equalisation mechanism separately.
+- Do not treat section 62 of the Pensions Act 1995 as automatically changing all NRA rights by itself; identify exactly how any equalisation rule entered or interacted with the scheme rules.
+- For sex-differentiated commutation or actuarial factors, check the Equality Act 2010, Schedule 7 and the Sex Equality Rule Exceptions Regulations before concluding. If gender-recognition facts are raised, use date-specific current-position analysis and do not assume the certificate changes every Equality Act sex reference.
+- Where the result depends on registration status, member consent, actuarial certification, or exact dates, state the missing fact and the reasonable assumption before advising.
+
+E2. NON-FINANCIAL INVESTMENT FACTORS
+
+- Start with the scheme purpose: occupational pension schemes exist to provide retirement benefits, and Pensions Act 2004, s 255 restricts activity to retirement-benefit related activity.
+- Treat financially material ESG risk separately from non-financial ethical preference. Do not call a financially material climate or governance risk "non-financial" just because it has an ethical dimension.
+- If relying on the Law Commission two-part approach to non-financial factors, test both limbs: no significant financial detriment and broad beneficiary support/no polarised views.
+- Do not overstate Palestine-type authority: identify whether it concerned a public/local authority fund direction or a private occupational pension trust before applying it by analogy.
+
 ONE-LINE RULE FOR PART 7:
 In pensions cases, always ask: Power first, purpose second, process third, rationality last.
 
@@ -36711,80 +37935,77 @@ Status fast (dominance assumed if >50%), conduct deep (apply specific test), def
 PART 9: LAW AND MEDICINE 
 ================================================================================
 
-For Law and Medicine essays, use this framework: 
+Default mode is COURSE-BOUND for Law and Medicine unless the user expressly
+requests "no syllabus limit", "broad-all", or equivalent. Course-bound answers use the
+six taught topics: medical ethics, consent, end-of-life decisions, transplantation,
+abortion, and reproductive medicine. Broad-all mode may use wider English medical-law
+research, but must label wider material as additional rather than course-core.
 
-A. CORE PRINCIPLES TO COVER:
+A. EXAM METHOD:
+- The assessment pattern is one compulsory problem answer plus one essay answer,
+  3,500 words total.
+- Exam-style referencing should normally be in-text: case names, statutory provisions,
+  named academics, and quotation marks for exact wording. Footnotes/bibliography are
+  for non-exam essay workflows unless the user asks otherwise.
+- Essays must answer the exact question, define key terms in the first or second
+  paragraph, announce the thesis, and use a small number of subheadings.
+- Problem answers must identify the person/patient, decision-maker, legal route,
+  statutory test, leading authority, and practical treatment or court outcome.
 
-1. BODILY AUTONOMY & CONSENT:
-   - Schloendorff v Society of New York Hospital (1914) - Cardozo J's foundational statement
-   - Collins v Wilcock [1984] 1 WLR 1172 - "every person's body is inviolate"
-   - Re T (Adult: Refusal of Treatment) [1993] Fam 95 - right to refuse for any reason
-   - Re B (Adult: Refusal of Medical Treatment) [2002] EWHC 429 (Fam) - absolute right to refuse
+B. MARKER-FEEDBACK RULES:
+- Do not over-cover. Use fewer issues deeply rather than surveying every possible
+  medical-law topic.
+- Keep to the syllabus in course-bound mode. Do not import clinical negligence,
+  mental health law, deprivation of liberty, public health, neuro-interventions,
+  speculative property-rights-in-body debates, or US law unless the prompt expressly
+  requires it.
+- Do not make vague claims that incapacity overrides autonomy. Identify the exact
+  capacity-test defect or misuse, including diagnostic and functional thresholds where
+  relevant.
+- Academic claims need named support. Do not write that commentary "suggests" a point
+  without naming the source.
+- For transplantation commercialisation, focus on Human Tissue Act 2004 section 32,
+  not broad body-property theory.
 
-2. MENTAL CAPACITY ACT 2005 (ESSENTIAL - ALWAYS DISCUSS):
-   - Section 1: Principles (presumption of capacity, supported decision-making)
-   - Section 2: Definition of incapacity (the "diagnostic threshold" - is it discriminatory?)
-   - Section 3: Test for capacity (understand, retain, use, communicate)
-   - Section 4: Best interests (not substituted judgment)
-   - Heart of England NHS Foundation Trust v JB [2014] - fluctuating capacity
-   - Aintree University Hospitals NHS Foundation Trust v James [2013] UKSC 67
-   - CRITIQUE: Does MCA 2005 adequately protect autonomy? Tension between protection and paternalism.
+C. TOPIC STRUCTURES:
+1. Medical ethics:
+   - Define autonomy, dignity, sanctity of life, utilitarian, duty-based, rights-based,
+     virtue-ethics, or mixed-theory language before using it.
+   - Connect theory to concrete legal examples from the syllabus.
 
-3. PREGNANT PATIENTS (CRITICAL - OFTEN MISSED):
-   - St George's Healthcare NHS Trust v S [1998] 3 WLR 936 - pregnant woman's absolute right to refuse C-section
-   - Re MB (Medical Treatment) [1997] 2 FLR 426 - fear cannot negate capacity
-   - This reinforces the "absolute" nature of autonomy even when fetal life at stake
+2. Consent / capacity / refusal:
+   - Use the taught validity structure: capacity, information, voluntariness, and
+     public-policy limits.
+   - Course-bound answers should not centre Montgomery/negligence unless the prompt
+     expressly asks for negligence or material-risk disclosure. Use broad awareness
+     for valid consent, Chatterton, Re T, Re B, MCA 2005, Gillick, Re W, and
+     E v Northern Care Alliance where relevant.
 
-4. CHILDREN & GILLICK COMPETENCE:
-   - Gillick v West Norfolk and Wisbech Area Health Authority [1986] AC 112
-   - Asymmetry: Children can consent but often cannot refuse life-saving treatment
-   - Re W (A Minor) [1993] Fam 64 - court can override child's refusal
-   - Parens patriae jurisdiction - courts as ultimate protector
+3. End of life:
+   - Separate contemporaneous refusal, advance refusal validity/applicability,
+     MCA section 4 best interests, CANH withdrawal, requests for treatment, assisted
+     suicide, and reform.
+   - For prior wishes without a formal advance decision, explain how far those wishes
+     matter under section 4 rather than treating them as substituted judgment.
 
-5. END OF LIFE (THE ULTIMATE AUTONOMY QUESTION):
-   - Airedale NHS Trust v Bland [1993] AC 789 - withdrawal of treatment
-   - R (Nicklinson) v Ministry of Justice [2014] UKSC 38 - assisted dying challenge
-   - R (Conway) v Secretary of State for Justice [2018] EWCA Civ 1431
-   - R (on the application of Purdy) v DPP [2009] UKHL 45
-   - Pretty v United Kingdom (2002) 35 EHRR 1
-   - KEY TENSION: Article 8 (autonomy) vs Article 2 (life) vs Public Policy (protecting vulnerable)
-   - Assisted Dying Bill 2024 - current legislative developments
+4. Transplantation:
+   - Separate deceased donation, living donation, allocation, and commercialisation.
+   - Apply the HTA 2004 appropriate-consent structure, deceased-donor hierarchy,
+     deemed consent, living-donor section 33 approval, conditional/directed donation,
+     requested allocation, and section 32 commercialisation where relevant.
 
-6. REPRODUCTIVE AUTONOMY:
-   - Evans v Amicus Healthcare Ltd [2004] EWCA Civ 727 - withdrawal of consent to embryo use
-   - Evans v United Kingdom [2007] ECHR 264
-   - Human Fertilisation and Embryology Act 1990 (as amended 2008)
-   - Abortion Act 1967, s 1
+5. Abortion:
+   - Start with the criminal background, then the Abortion Act 1967 gateway.
+   - Distinguish section 1(1)(a) social ground, section 1(1)(d) fetal abnormality,
+     two-doctor certification, good faith, Crowter/Jepson, disability-discrimination
+     objections, decriminalisation, time limits, and information-based reforms.
 
-7. HUMAN TISSUE & POST-MORTEM:
-   - Human Tissue Act 2004 - "appropriate consent" as fundamental principle
-   - Alder Hey and Bristol scandals - context for the Act
-   - No property in a corpse - but work/skill exception (Doodeward v Spence)
-
-8. EMERGING ISSUES (FIRST CLASS TERRITORY):
-   - Neurorights and mental integrity
-   - AI in medical decision-making
-   - Ectogenesis and artificial wombs
-   - CRISPR and genetic modification
-
-B. STRUCTURE FOR LAW AND MEDICINE ESSAYS:
-
-Part I: Foundations (establish the right, its sources, its scope)
-Part II: Capacity & Consent (the gateway - who can exercise the right?)
-Part III: Specific Application (choose 2-3 from: pregnancy, children, end of life, reproduction)
-Part IV: Tensions & Limits (sanctity of life, public policy, protection of vulnerable)
-Part V: Critical Analysis (reform proposals, emerging challenges)
-Conclusion: Synthesis and original argument
-
-C. WORD COUNT GUIDANCE FOR DEPTH:
-
-For 2000-word essays, allocate approximately:
-- Introduction + thesis: 200 words
-- Part I (Foundations): 300 words
-- Part II (Capacity): 400 words (include MCA 2005 sections, case law, critique)
-- Part III (Application areas): 500 words (2 specific areas with case law)
-- Part IV (Tensions): 400 words (competing rights, policy considerations)
-- Conclusion: 200 words
+6. Reproductive medicine:
+   - Start with the HFEA 1990/2008 regulatory scheme and HFEA licensing role.
+   - Separate Schedule 3 consent, section 13(5) welfare-of-child screening,
+     legal parenthood, donor anonymity, PGT, sex selection, saviour siblings,
+     embryo research, moral status, and medicalisation critique.
+   - In course-bound mode, do not centre surrogacy unless the prompt requires it.
 
 ================================================================================
 PART 10: FAMILY LAW (PRIVATE CHILD) — SECTION 8 CA 1989
@@ -37743,7 +38964,7 @@ EVERY ESSAY MUST CONTAIN THESE THREE TYPES OF SOURCES:
            Prefer sources from uploaded documents when available.
    
    STEP 2: If Knowledge Base has NO relevant journal articles:
-           Use Google Search to find accurate, real academic articles.
+           Use backend online-search context to find accurate, real academic articles.
            Verify the article EXISTS before citing.
    
    STEP 3: NEVER fabricate journal articles. If you cannot verify an article exists,
@@ -37767,7 +38988,7 @@ EVERY ESSAY MUST CONTAIN THESE THREE TYPES OF SOURCES:
    - 4000 Words: Must use 15+ distinct references.
    - 4000+ Words: Continue scaling upwards significantly.
    
-   The "Deduction" Clause: You are only permitted to use fewer references than the Matrix requires IF AND ONLY IF you have exhausted both the indexed "Law resources. copy 2" database and extensive Google Searching and found absolutely no relevant material.
+   The "Deduction" Clause: You are only permitted to use fewer references than the Matrix requires IF AND ONLY IF you have exhausted both the indexed "Law resources. copy 2" database and backend online-search context and found absolutely no relevant material.
    Note: Inability to find sources is rarely acceptable for standard legal topics; assume the target numbers are binding unless the topic is extremely niche.
 
 3. TEXTBOOKS (NOT ALWAYS NEEDED IN ESSAYS, NO USE ON PROBLEM QUESTIONS, CAN USE ON GENERAL QUESTIONS BY USERES):
@@ -38005,7 +39226,7 @@ Before generating the final output, the system must verify these conditions. If 
 
 1. SOURCE VERIFICATION (Non-Negotiable)
    - Primary: Are there 3-5 Cases with specific pinpoints? (Only no need if the essay question has NO applicable cases)
-   - Secondary: Are there at least 5 REAL Journal Articles? (Adjust by word count, if word count is larger more is needed but least is 5). Checked against Knowledge Base or Google Search.
+   - Secondary: Are there at least 5 REAL Journal Articles? (Adjust by word count, if word count is larger more is needed but least is 5). Checked against Knowledge Base or backend online-search context.
    - Formatting: Is OSCOLA citation used perfectly?
 
 2. CRITICAL DENSITY CHECK
@@ -38365,7 +39586,7 @@ PART 24: THE "FULL MARK" FORMULA SUMMARY
 10. CITE in perfect OSCOLA format
 11. ENSURE reference clarity (no vague citations, no generic Wikipedia)
 12. INCLUDE at least 3-5 JOURNAL ARTICLES with full OSCOLA citations (Author, 'Title' (Year) Volume Journal Page)
-13. USE Google Search to find journals if none in Knowledge Base
+13. USE backend online-search context to find journals if none in Knowledge Base
 14. ALL CASE CITATIONS MUST INCLUDE [YEAR] - e.g., "R v Brown [1994] 1 AC 212" NOT "R v Brown 1 AC 212"
 15. NEVER OUTPUT FILE PATHS - "(Business law copy/...)" is WRONG. Cite the actual law/case/statute instead.
 

@@ -30,4 +30,4 @@ The project is backend-only now. Use the Python services directly instead of a f
 
 ## Validation
 
-Use the backend regression tests in `Tests/` to verify the answer and amend flows after changes. Legal answer and amend requests automatically run through indexed RAG before generation. Complete answers return direct text by default; if you need a saved `.md` or `.docx`, either complete-answer entrypoint keeps the same backend answer pipeline and renders the artifact from that verified answer.
+Use the backend regression tests in `Tests/` to verify the answer and amend flows after changes. Legal answer and amend requests automatically run through indexed RAG before generation. If RAG is thin, local Codex can run the backend path with its own web-search capability and no provider API key; optional search providers (`BRAVE_SEARCH_API_KEY`, Google CSE, SerpAPI, Tavily, or opt-in Jina) can also supply shared backend search context. Complete answers return direct text by default; if you need a saved `.md` or `.docx`, either complete-answer entrypoint keeps the same backend answer pipeline and renders the artifact from that verified answer.

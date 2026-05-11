@@ -115,9 +115,11 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         helper_py = project / "render_topic_notes.py"
         draft_docx = project / "topic_notes.docx"
         unrelated_readme = project / "README.md"
+        unrelated_desktop_docx = desktop / "unrelated.docx"
         for path in (verification_path, authority_path, sentence_path, notes_md, helper_py, draft_docx):
             path.write_text("{}", encoding="utf-8")
         unrelated_readme.write_text("keep", encoding="utf-8")
+        _write_minimal_docx(unrelated_desktop_docx, "Do not delete.")
 
         # Monkeypatch validators so this regression only tests runtime cleanup/output guards.
         original_validate_authority = amend_docx._validate_authority_verification_report
@@ -133,7 +135,14 @@ with tempfile.TemporaryDirectory() as tmp_dir:
                     "verification_ledger_path": str(verification_path),
                     "authority_verification_report_path": str(authority_path),
                     "sentence_support_report_path": str(sentence_path),
-                    "cleanup_paths": [str(notes_md), str(helper_py), str(draft_docx), str(source), str(output)],
+                    "cleanup_paths": [
+                        str(notes_md),
+                        str(helper_py),
+                        str(draft_docx),
+                        str(source),
+                        str(output),
+                        str(unrelated_desktop_docx),
+                    ],
                     "review_context": _minimal_review_context(),
                 },
             )
@@ -147,6 +156,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
             assert not helper_py.exists()
             assert not draft_docx.exists()
             assert unrelated_readme.exists()
+            assert unrelated_desktop_docx.exists()
         finally:
             amend_docx._validate_authority_verification_report = original_validate_authority
             amend_docx._validate_sentence_support_report = original_validate_sentence

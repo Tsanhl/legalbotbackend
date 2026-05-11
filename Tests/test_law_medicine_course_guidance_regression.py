@@ -134,10 +134,27 @@ def test_law_medicine_no_limitation_mode_is_clear_in_prompt() -> None:
         assert phrase in block
 
 
+def test_course_bound_exclusion_language_does_not_route_to_clinical_negligence() -> None:
+    prompt = (
+        "Law and Medicine - Essay Question. Critically examine whether English law gives adequate "
+        "respect to bodily autonomy in medical treatment decisions. Stay within the module syllabus. "
+        "Do not drift into clinical negligence/Montgomery, mental health law, deprivation of liberty, "
+        "public health law, US law, or surrogacy unless directly necessary."
+    )
+    profile = _infer_retrieval_profile(prompt)
+    assert profile["topic"] == "medical_ethics"
+    block = _build_local_code_rag_answer_prompt_block(prompt, enforce_long_response_split=False)
+    assert "[SUBJECT GUIDE — law_medicine]" in block
+    assert "Course-bound mode" in block
+    assert "Course-bound exclusions" in block
+    assert "clinical-negligence disclosure doctrine" in block
+
+
 def run() -> None:
     test_law_medicine_course_prompts_route_and_split()
     test_law_medicine_guide_contains_course_bound_rules()
     test_law_medicine_no_limitation_mode_is_clear_in_prompt()
+    test_course_bound_exclusion_language_does_not_route_to_clinical_negligence()
     print("Law & Medicine course-guidance regression passed.")
 
 

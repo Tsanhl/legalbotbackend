@@ -3020,6 +3020,27 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
             "exclusivity",
         ]
     )
+    law_medicine_context = any(
+        k in ql
+        for k in [
+            "law and medicine", "medical law", "medical treatment decisions",
+            "module syllabus", "course-bound", "course bound", "within the module syllabus",
+            "consent/refusal", "end-of-life", "end of life", "transplantation",
+            "abortion", "reproductive medicine", "hfea", "human tissue act",
+            "abortion act 1967",
+        ]
+    )
+    law_medicine_exclusion_mentions_clinical_negligence = (
+        law_medicine_context
+        and any(k in ql for k in ["clinical negligence", "montgomery"])
+        and any(
+            k in ql
+            for k in [
+                "do not", "avoid", "excluded", "exclusions", "unless directly necessary",
+                "unless expressly asked", "do not drift", "do not centre",
+            ]
+        )
+    )
 
     topic = "general_legal"
     if any(k in ql for k in [
@@ -3046,7 +3067,7 @@ def _infer_retrieval_profile(query: str, _allow_unit_split: bool = True) -> Dict
                 "failure to diagnose", "failure to refer", "delay in treatment", "delay in imaging",
             ])
         )
-    ):
+    ) and not law_medicine_exclusion_mentions_clinical_negligence:
         topic = "clinical_negligence_causation_loss_of_chance"
     elif any(k in ql for k in [
         "medical ethics", "law and medicine ethics", "bodily autonomy",

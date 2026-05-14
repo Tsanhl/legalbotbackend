@@ -1,0 +1,19 @@
+node_modules/
+.DS_Store
+__pycache__/
+*.pyc
+.streamlit/
+chroma_db/
+law-resources-index.json
+citation_graph.pkl
+generated_answers/
+.env
+.env.*
+!.env.example
+.venv/
+.claude/
+.codex_runtime/
+Law resouces  copy 2/
+git-lfs-3.7.1/
+backend_*_answers.md
+removed_citations_log.json

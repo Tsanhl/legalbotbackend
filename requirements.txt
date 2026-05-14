@@ -1,0 +1,11 @@
+google-generativeai
+google-genai
+anthropic
+python-dotenv
+pypdf
+tqdm
+watchdog
+PyMuPDF
+python-docx
+chromadb
+numpy
